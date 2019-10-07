@@ -1,3 +1,4 @@
+use rand::{Rng, thread_rng};
 use std::collections::HashMap;
 use std::fmt;
 use std::io;
@@ -7,8 +8,8 @@ macro_rules! parse_input {
 }
 
 /// Compute the “Manhattan distance” between two points.
-fn manh_dist(a: [u32; 2], b: [u32; 2]) -> u32 {
-  ((a[0] as f32 - b[0] as f32).abs() + (a[1] as f32 - b[1] as f32).abs()) as u32
+fn manh_dist(a: [i32; 2], b: [i32; 2]) -> i32 {
+  (a[0] - b[0]).abs() + (a[1] - b[1]).abs()
 }
 
 trait TryFrom<T>: Sized {
@@ -100,21 +101,12 @@ impl fmt::Display for RequestItem {
   }
 }
 
-impl RequestItem {
-  fn into_item(self) -> Item {
-    match self {
-      RequestItem::Radar => Item::Radar,
-      RequestItem::Trap => Item::Trap,
-    }
-  }
-}
-
 /// Possible request.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Request {
-  Move(u32, u32),
+  Move(i32, i32),
   Wait,
-  Dig(u32, u32),
+  Dig(i32, i32),
   Item(RequestItem),
 }
 
@@ -134,7 +126,7 @@ impl Request {
     println!("{}", self);
   }
 
-  fn back_to_hq(position: [u32; 2]) -> Request {
+  fn back_to_hq(position: [i32; 2]) -> Request {
     Request::Move(0, position[1])
   }
 }
@@ -187,12 +179,13 @@ struct GameState {
   miners: Vec<Miner>,
   opponent_miners: Vec<Miner>,
   entities: HashMap<UID, Entity>,
-  burried_radars: HashMap<UID, [u32; 2]>,
-  burried_traps: HashMap<UID, [u32; 2]>,
+  burried_radars: HashMap<UID, [i32; 2]>,
+  burried_traps: HashMap<UID, [i32; 2]>,
   radar_cooldown: u32,
   trap_cooldown: u32,
 
   // tactical
+  miner_with_radar: Option<usize>,
 }
 
 impl GameState {
@@ -210,6 +203,7 @@ impl GameState {
       burried_traps: HashMap::new(),
       radar_cooldown: 0,
       trap_cooldown: 0,
+      miner_with_radar: None,
     }
   }
 
@@ -259,7 +253,7 @@ impl GameState {
     index
   }
 
-  fn update_position(&mut self, uid: UID, px: u32, py: u32) {
+  fn update_position(&mut self, uid: UID, px: i32, py: i32) {
     match self.entities.get(&uid) {
       Some(Entity::Miner(index)) => {
         let miner = &mut self.miners[*index];
@@ -305,15 +299,15 @@ impl GameState {
     }
   }
 
-  fn burry_radar(&mut self, uid: UID, x: u32, y: u32) {
+  fn burry_radar(&mut self, uid: UID, x: i32, y: i32) {
     self.burried_radars.insert(uid, [x, y]);
   }
 
-  fn burry_trap(&mut self, uid: UID, x: u32, y: u32) {
+  fn burry_trap(&mut self, uid: UID, x: i32, y: i32) {
     self.burried_traps.insert(uid, [x, y]);
   }
 
-  fn update_radar_position(&mut self, uid: UID, x: u32, y: u32) {
+  fn update_radar_position(&mut self, uid: UID, x: i32, y: i32) {
     if let Some(ref mut p) = self.burried_radars.get_mut(&uid) {
       p[0] = x;
       p[1] = y;
@@ -322,7 +316,7 @@ impl GameState {
     }
   }
 
-  fn update_trap_position(&mut self, uid: UID, x: u32, y: u32) {
+  fn update_trap_position(&mut self, uid: UID, x: i32, y: i32) {
     if let Some(ref mut p) = self.burried_traps.get_mut(&uid) {
       p[0] = x;
       p[1] = y;
@@ -335,12 +329,65 @@ impl GameState {
     self.miners.iter()
   }
 
-  fn miner(&self, index: usize) -> Option<&Miner> {
-    self.miners.get(index)
+  fn cell(&self, x: i32, y: i32) -> Option<&Cell> {
+    self.cells.get(y as usize * self.width + x as usize)
   }
 
-  fn cell(&self, x: usize, y: usize) -> Option<&Cell> {
-    self.cells.get(y * self.width + x)
+  fn assign_radar(&mut self) {
+    // keep track of the best choice (i.e. the one nearest y ÷ 2)
+    let mut found = None;
+    let middle = self.height / 2;
+
+    for (miner_index, miner) in self.miners().enumerate() {
+      let dist = (miner.y - middle as i32).abs();
+
+      if let Some((_, found_dist)) = found {
+        if dist < found_dist {
+          found = Some((miner_index, dist));
+        }
+      } else {
+        found = Some((miner_index, dist));
+      }
+    }
+
+    let (index, _) = found.unwrap();
+    self.miner_with_radar = Some(index);
+    self.miners[index].order = Order::deploy_radar_to_random(self.width as i32, self.height as i32);
+  }
+
+  /// Find the most appealing order to follow.
+  ///
+  /// If some ore is available, the miner will try to go to the nearest place without overloading
+  /// it. If no ore information is available, the miner will go in a random direction.
+  fn choose_order(&self, miner_index: usize) -> Order {
+    let mut closest_cell = None;
+    let miner = &self.miners[miner_index];
+
+    // FIXME: ensure the cell we’re targetting is not already overcrowded by other miners
+
+    for x in 0 .. self.width {
+      for y in 0 .. self.height {
+        let cell = self.cell(x as i32, y as i32).unwrap();
+        let x = x as i32;
+        let y = y as i32;
+
+        if let Some(ore_amount) = cell.ore_amount {
+          if let Some((cx, cy, _)) = closest_cell {
+            if manh_dist([x, y], [miner.x, miner.y]) < manh_dist([cx, cy], [miner.x, miner.y]) {
+              closest_cell = Some((x, y, ore_amount));
+            }
+          } else {
+            closest_cell = Some((x, y, ore_amount));
+          }
+        }
+      }
+    }
+
+    if let Some((x, y, _)) = closest_cell {
+      Order::GoTo(x, y)
+    } else {
+      Order::go_to_random(self.width as i32, self.height as i32)
+    }
   }
 }
 
@@ -375,13 +422,41 @@ impl fmt::Display for Cell {
   }
 }
 
-#[derive(Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct Miner {
-  x: u32,
-  y: u32,
+  x: i32,
+  y: i32,
   item: Option<Item>,
   uid: UID,
   alive: bool,
+  order: Order,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum Order {
+  GoTo(i32, i32),
+  DeployRadarAt(i32, i32),
+  Deliver(i32, i32),
+}
+
+impl Order {
+  fn go_to_random(width: i32, height: i32) -> Self {
+    let mut rng = thread_rng();
+    Order::GoTo(rng.gen_range(1, width), rng.gen_range(0, height))
+  }
+
+  fn deploy_radar_to_random(width: i32, height: i32) -> Self {
+    let mut rng = thread_rng();
+    Order::DeployRadarAt(rng.gen_range(1, width), rng.gen_range(0, height))
+  }
+
+  fn destination(&self) -> [i32; 2] {
+    match *self {
+      Order::GoTo(x, y) => [x, y],
+      Order::DeployRadarAt(x, y) => [x, y],
+      Order::Deliver(x, y) => [x, y],
+    }
+  }
 }
 
 fn main() {
@@ -389,8 +464,8 @@ fn main() {
   io::stdin().read_line(&mut input_line).unwrap();
   let inputs = input_line.split(" ").collect::<Vec<_>>();
 
-  let width = parse_input!(inputs[0], u32);
-  let height = parse_input!(inputs[1], u32); // size of the map
+  let width = parse_input!(inputs[0], i32);
+  let height = parse_input!(inputs[1], i32); // size of the map
 
   let mut game_state = GameState::new(width as usize, height as usize);
 
@@ -432,7 +507,7 @@ fn main() {
     game_state.set_radar_cooldown(radar_cooldown);
     game_state.set_trap_cooldown(trap_cooldown);
 
-    for i in 0..entity_count as usize {
+    for _ in 0..entity_count as usize {
       let mut input_line = String::new();
       io::stdin().read_line(&mut input_line).unwrap();
       let inputs = input_line.split(" ").collect::<Vec<_>>();
@@ -450,11 +525,12 @@ fn main() {
         match entity_type {
           EntityType::Miner => {
             let miner_index = game_state.add_miner(Miner {
-              x: x as u32,
-              y: y as u32,
+              x,
+              y,
               item,
               uid,
               alive: true,
+              order: Order::go_to_random(width, height),
             });
 
             game_state.add_entity(uid, Entity::Miner(miner_index));
@@ -462,11 +538,12 @@ fn main() {
 
           EntityType::OpponentMiner => {
             let opponent_miner_index = game_state.add_opponent_miner(Miner {
-              x: x as u32,
-              y: y as u32,
+              x,
+              y,
               item,
               uid,
               alive: true,
+              order: Order::go_to_random(width, height),
             });
 
             game_state.add_entity(uid, Entity::OpponentMiner(opponent_miner_index));
@@ -474,12 +551,12 @@ fn main() {
 
           EntityType::BurriedRadar => {
             game_state.add_entity(uid, Entity::BurriedRadar);
-            game_state.burry_radar(uid, x as u32, y as u32);
+            game_state.burry_radar(uid, x, y);
           }
 
           EntityType::BurriedTrap => {
             game_state.add_entity(uid, Entity::BurriedTrap);
-            game_state.burry_trap(uid, x as u32, y as u32);
+            game_state.burry_trap(uid, x, y);
           }
         }
       } else {
@@ -491,7 +568,7 @@ fn main() {
             }
 
             // update position
-            game_state.update_position(uid, x as u32, y as u32);
+            game_state.update_position(uid, x, y);
 
             // update item
             game_state.update_item(uid, item);
@@ -499,28 +576,98 @@ fn main() {
 
           EntityType::BurriedRadar => {
             // position of this radar has changed
-            game_state.update_radar_position(uid, x as u32, y as u32);
+            game_state.update_radar_position(uid, x, y);
           }
 
           EntityType::BurriedTrap => {
             // position of this trap has changed
-            game_state.update_trap_position(uid, x as u32, y as u32);
+            game_state.update_trap_position(uid, x, y);
           }
         }
       }
     }
 
     // display the grid on stderr
-    for x in 0 .. width as usize {
-      for y in 0 .. height as usize {
-        eprint!("{}", game_state.cell(x, y).unwrap());
+    for x in 0 .. width {
+      for y in 0 .. height {
+        let cell = game_state.cell(x, y).unwrap();
+
+        match cell.ore_amount {
+          Some(amount) if amount > 0 => {
+            eprintln!("detected some ore at ({}, {}): {}", x, y, amount);
+          }
+
+          _ => ()
+        }
       }
 
       eprintln!();
     }
 
-    for (miner_index, miner) in game_state.miners().enumerate() {
-      Request::Wait.submit();
+    // FIXME: idea: burry the radar then unburry it immediately in order to burry it elsewhere
+    // select a miner to carry radar if not already there
+    if game_state.miner_with_radar.is_none() {
+      game_state.assign_radar();
+    }
+
+    for miner_index in 0 .. game_state.miners.len() {
+      let miner = game_state.miners[miner_index].clone();
+
+      if Some(miner_index) == game_state.miner_with_radar {
+        if let Order::DeployRadarAt(x, y) = miner.order {
+          if miner.item == Some(Item::Radar) {
+            // if that unit has already the radar
+            if manh_dist([x, y], [miner.x, miner.y]) == 0 {
+              // if we arrived at destination, just burry the radar
+              game_state.miner_with_radar = None;
+              game_state.miners[miner_index].order = game_state.choose_order(miner_index);
+              Request::Dig(x, y).submit();
+            } else {
+              // otherwise, go there
+              Request::Move(x, y).submit();
+            }
+          } else if miner.x != 0 {
+            // go home to ask for a radar
+            Request::back_to_hq([miner.x, miner.y]).submit();
+          } else {
+            // ask a radar
+            Request::Item(RequestItem::Radar).submit();
+          }
+        } else {
+          unreachable!();
+        }
+      } else {
+        match miner.order {
+          Order::GoTo(x, y) => {
+            if manh_dist([x, y], [miner.x, miner.y]) == 0 {
+
+              if miner.item == Some(Item::Ore) {
+                // we just digged some ore; get back to the HQ
+                game_state.miners[miner_index].order = Order::Deliver(x, y);
+                Request::back_to_hq([x, y]).submit();
+              } else if game_state.cell(x, y).unwrap().ore_amount.is_some() {
+                game_state.miners[miner_index].order = Order::Deliver(x, y);
+                Request::Dig(x, y).submit();
+              } else {
+                let order = game_state.choose_order(miner_index);
+                let [x, y] = order.destination();
+
+                game_state.miners[miner_index].order = order;
+
+                Request::Move(x, y).submit();
+              }
+            } else {
+              Request::Move(x, y).submit();
+            }
+          }
+
+          Order::Deliver(x, y) => {
+            Request::back_to_hq([x, y]).submit();
+          }
+
+          _ => unreachable!()
+        }
+      }
     }
   }
 }
