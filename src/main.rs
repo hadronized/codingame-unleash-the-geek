@@ -2,9 +2,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io;
 
-const WIDTH: usize = 30;
-const HEIGHT: usize = 15;
-
 macro_rules! parse_input {
     ($x:expr, $t:ident) => ($x.trim().parse::<$t>().unwrap())
 }
@@ -182,6 +179,8 @@ type UID = u32;
 #[derive(Debug)]
 struct GameState {
   // informational
+  width: usize,
+  height: usize,
   my_score: u32,
   opponent_score: u32,
   cells: Vec<Cell>,
@@ -196,12 +195,14 @@ struct GameState {
   // tactical
 }
 
-impl Default for GameState {
-  fn default() -> Self {
+impl GameState {
+  fn new(width: usize, height: usize) -> Self {
     GameState {
+      width,
+      height,
       my_score: 0,
       opponent_score: 0,
-      cells: vec![Cell::default(); WIDTH * HEIGHT],
+      cells: vec![Cell::default(); width * height],
       miners: Vec::new(),
       opponent_miners: Vec::new(),
       entities: HashMap::new(),
@@ -211,9 +212,7 @@ impl Default for GameState {
       trap_cooldown: 0,
     }
   }
-}
 
-impl GameState {
   fn set_my_score(&mut self, score: u32) {
     self.my_score = score;
   }
@@ -223,11 +222,11 @@ impl GameState {
   }
 
   fn set_ore(&mut self, x: usize, y: usize, ore_amount: Option<usize>) {
-    self.cells[y * WIDTH + x].ore_amount = ore_amount;
+    self.cells[y * self.width + x].ore_amount = ore_amount;
   }
 
   fn set_hole(&mut self, x: usize, y: usize, hole: bool) {
-    self.cells[y * WIDTH + x].has_hole = hole;
+    self.cells[y * self.width + x].has_hole = hole;
   }
 
   fn set_radar_cooldown(&mut self, cooldown: u32) {
@@ -339,6 +338,10 @@ impl GameState {
   fn miner(&self, index: usize) -> Option<&Miner> {
     self.miners.get(index)
   }
+
+  fn cell(&self, x: usize, y: usize) -> Option<&Cell> {
+    self.cells.get(y * self.width + x)
+  }
 }
 
 /// Describe a single cell on the grid.
@@ -354,6 +357,21 @@ impl Default for Cell {
       ore_amount: None,
       has_hole: false,
     }
+  }
+}
+
+impl fmt::Display for Cell {
+  fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+    let hole = if self.has_hole { 'o' } else { 'x' };
+    let ore_amount = if let Some(ore_amount) = self.ore_amount {
+      format!("{:2}", ore_amount)
+    } else {
+      "  ".to_owned()
+    };
+
+    write!(f, "{}{}", hole, ore_amount)?;
+
+    Ok(())
   }
 }
 
@@ -374,7 +392,7 @@ fn main() {
   let width = parse_input!(inputs[0], u32);
   let height = parse_input!(inputs[1], u32); // size of the map
 
-  let mut game_state = GameState::default();
+  let mut game_state = GameState::new(width as usize, height as usize);
 
   // game loop
   loop {
@@ -490,6 +508,15 @@ fn main() {
           }
         }
       }
+    }
+
+    // display the grid on stderr
+    for x in 0 .. width as usize {
+      for y in 0 .. height as usize {
+        eprint!("{}", game_state.cell(x, y).unwrap());
+      }
+
+      eprintln!();
     }
 
     for (miner_index, miner) in game_state.miners().enumerate() {
