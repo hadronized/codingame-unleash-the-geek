@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::convert::{TryFrom, TryInto as _};
 use std::fmt;
 use std::io;
 
@@ -8,6 +7,26 @@ const HEIGHT: usize = 15;
 
 macro_rules! parse_input {
     ($x:expr, $t:ident) => ($x.trim().parse::<$t>().unwrap())
+}
+
+trait TryFrom<T>: Sized {
+  type Error;
+
+  fn try_from(t: T) -> Result<Self, Self::Error>;
+}
+
+trait TryInto<T> {
+  type Error;
+
+  fn try_into(self) -> Result<T, Self::Error>;
+}
+
+impl<T, U> TryInto<T> for U where T: TryFrom<U> {
+  type Error = T::Error;
+
+  fn try_into(self) -> Result<T, Self::Error> {
+    T::try_from(self)
+  }
 }
 
 /// Entity types.
@@ -50,10 +69,10 @@ enum Item {
   Ore
 }
 
-impl TryFrom<u32> for Item {
+impl TryFrom<i32> for Item {
   type Error = String;
 
-  fn try_from(value: u32) -> Result<Self, Self::Error> {
+  fn try_from(value: i32) -> Result<Self, Self::Error> {
     match value {
       2 => Ok(Item::Radar),
       3 => Ok(Item::Trap),
@@ -261,6 +280,36 @@ impl GameState {
       _ => eprintln!("trying to kill miner {}, but it’s not a miner", uid)
     }
   }
+
+  fn burry_radar(&mut self, uid: UID, x: u32, y: u32) {
+    self.burried_radars.insert(uid, [x, y]);
+  }
+
+  fn burry_trap(&mut self, uid: UID, x: u32, y: u32) {
+    self.burried_traps.insert(uid, [x, y]);
+  }
+
+  fn update_radar_position(&mut self, uid: UID, x: u32, y: u32) {
+    if let Some(ref mut p) = self.burried_radars.get_mut(&uid) {
+      p[0] = x;
+      p[1] = y;
+    } else {
+      eprintln!("trying to update burried radar {} position, but it’s not a radar", uid);
+    }
+  }
+
+  fn update_trap_position(&mut self, uid: UID, x: u32, y: u32) {
+    if let Some(ref mut p) = self.burried_traps.get_mut(&uid) {
+      p[0] = x;
+      p[1] = y;
+    } else {
+      eprintln!("trying to update burried trap {} position, but it’s not a trap", uid);
+    }
+  }
+
+  fn miners(&self) -> impl Iterator<Item = &Miner> {
+    self.miners.iter()
+  }
 }
 
 /// Describe a single cell on the grid.
@@ -319,7 +368,7 @@ fn main() {
       let inputs = input_line.split_whitespace().collect::<Vec<_>>();
 
       // we skip x = 0 as it’s HQ
-      for x in 1..width as usize {
+      for x in 0..width as usize {
         let ore: Option<usize> = inputs[2*y].trim().parse().ok(); // amount of ore or "?" if unknown
         let hole = parse_input!(inputs[2 * y + 1], u32) == 1; // 1 if cell has a hole
 
@@ -346,7 +395,7 @@ fn main() {
 
       let x = parse_input!(inputs[2], i32);
       let y = parse_input!(inputs[3], i32); // position of the entity
-      let item = parse_input!(inputs[4], u32).try_into().ok(); // if this entity is a robot, the item it is carrying (-1 for NONE, 2 for RADAR, 3 for TRAP, 4 for ORE)
+      let item = parse_input!(inputs[4], i32).try_into().ok(); // if this entity is a robot, the item it is carrying (-1 for NONE, 2 for RADAR, 3 for TRAP, 4 for ORE)
 
       // check if we need to update our entities
       if !game_state.entity_exists(uid) {
@@ -374,7 +423,15 @@ fn main() {
             game_state.add_entity(uid, Entity::OpponentMiner(opponent_miner_index));
           }
 
-          _ => ()
+          EntityType::BurriedRadar => {
+            game_state.add_entity(uid, Entity::BurriedRadar);
+            game_state.burry_radar(uid, x as u32, y as u32);
+          }
+
+          EntityType::BurriedTrap => {
+            game_state.add_entity(uid, Entity::BurriedTrap);
+            game_state.burry_trap(uid, x as u32, y as u32);
+          }
         }
       } else {
         match entity_type {
@@ -390,11 +447,21 @@ fn main() {
             // update item
             game_state.update_item(uid, item);
           }
+
+          EntityType::BurriedRadar => {
+            // position of this radar has changed
+            game_state.update_radar_position(uid, x as u32, y as u32);
+          }
+
+          EntityType::BurriedTrap => {
+            // position of this trap has changed
+            game_state.update_trap_position(uid, x as u32, y as u32);
+          }
         }
       }
     }
 
-    for i in 0..5 as usize {
+    for miner in game_state.miners() {
       println!("WAIT"); // WAIT|MOVE x y|DIG x y|REQUEST item
     }
   }
