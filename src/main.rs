@@ -9,9 +9,9 @@ macro_rules! parse_input {
     ($x:expr, $t:ident) => ($x.trim().parse::<$t>().unwrap())
 }
 
-/// Compute the “cell distance” between two points.
-fn cell_dist(a: [u32; 2], b: [u32; 2]) -> u32 {
-  ((a[0] as f32 - b[0] as f32).powf(2.) + (a[1] as f32 - b[1] as f32).powf(2.)).sqrt() as u32
+/// Compute the “Manhattan distance” between two points.
+fn manh_dist(a: [u32; 2], b: [u32; 2]) -> u32 {
+  ((a[0] as f32 - b[0] as f32).abs() + (a[1] as f32 - b[1] as f32).abs()) as u32
 }
 
 trait TryFrom<T>: Sized {
@@ -103,6 +103,15 @@ impl fmt::Display for RequestItem {
   }
 }
 
+impl RequestItem {
+  fn into_item(self) -> Item {
+    match self {
+      RequestItem::Radar => Item::Radar,
+      RequestItem::Trap => Item::Trap,
+    }
+  }
+}
+
 /// Possible request.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Request {
@@ -181,9 +190,10 @@ struct GameState {
   entities: HashMap<UID, Entity>,
   burried_radars: HashMap<UID, [u32; 2]>,
   burried_traps: HashMap<UID, [u32; 2]>,
+  radar_cooldown: u32,
+  trap_cooldown: u32,
 
   // tactical
-  designated_item_miner: Option<ItemDesignatedMiner>, // index of our miner designed to grab item
 }
 
 impl Default for GameState {
@@ -197,7 +207,8 @@ impl Default for GameState {
       entities: HashMap::new(),
       burried_radars: HashMap::new(),
       burried_traps: HashMap::new(),
-      designated_item_miner: None,
+      radar_cooldown: 0,
+      trap_cooldown: 0,
     }
   }
 }
@@ -217,6 +228,14 @@ impl GameState {
 
   fn set_hole(&mut self, x: usize, y: usize, hole: bool) {
     self.cells[y * WIDTH + x].has_hole = hole;
+  }
+
+  fn set_radar_cooldown(&mut self, cooldown: u32) {
+    self.radar_cooldown = cooldown;
+  }
+
+  fn set_trap_cooldown(&mut self, cooldown: u32) {
+    self.trap_cooldown = cooldown;
   }
 
   fn add_entity(&mut self, uid: UID, entity: Entity) {
@@ -244,43 +263,29 @@ impl GameState {
   fn update_position(&mut self, uid: UID, px: u32, py: u32) {
     match self.entities.get(&uid) {
       Some(Entity::Miner(index)) => {
-        if let Miner::Alive { ref mut x, ref mut y, .. } = self.miners[*index] {
-          *x = px;
-          *y = py;
-        } else {
-          eprintln!("trying to update miner {} position, but it’s dead", uid);
-        }
+        let miner = &mut self.miners[*index];
+        miner.x = px;
+        miner.y = py;
       }
 
       Some(Entity::OpponentMiner(index)) => {
-        if let Miner::Alive { ref mut x, ref mut y, .. } = self.opponent_miners[*index] {
-          *x = px;
-          *y = py;
-        } else {
-          eprintln!("trying to update opponent miner {} position, but it’s dead", uid);
-        }
+        let miner = &mut self.opponent_miners[*index];
+        miner.x = px;
+        miner.y = py;
       }
 
       _ => eprintln!("trying to update miner {} position, but it’s not a miner", uid)
     }
   }
 
-  fn update_item(&mut self, uid: UID, input_item: Option<Item>) {
+  fn update_item(&mut self, uid: UID, item: Option<Item>) {
     match self.entities.get(&uid) {
       Some(Entity::Miner(index)) => {
-        if let Miner::Alive { ref mut item, .. } = self.miners[*index] {
-          *item = input_item;
-        } else {
-          eprintln!("trying to update miner {} item, but it’s dead", uid);
-        }
+        self.miners[*index].item = item;
       }
 
       Some(Entity::OpponentMiner(index)) => {
-        if let Miner::Alive { ref mut item, .. } = self.opponent_miners[*index] {
-          *item = input_item;
-        } else {
-          eprintln!("trying to update opponent miner {} item, but it’s dead", uid);
-        }
+        self.opponent_miners[*index].item = item;
       }
 
       _ => eprintln!("trying to update miner {} item, but it’s not a miner", uid)
@@ -290,11 +295,11 @@ impl GameState {
   fn kill(&mut self, uid: UID) {
     match self.entities.get(&uid) {
       Some(Entity::Miner(index)) => {
-        self.miners[*index] = Miner::Dead;
+        self.miners[*index].alive = false;
       }
 
       Some(Entity::OpponentMiner(index)) => {
-        self.opponent_miners[*index] = Miner::Dead;
+        self.opponent_miners[*index].alive = false;
       }
 
       _ => eprintln!("trying to kill miner {}, but it’s not a miner", uid)
@@ -331,50 +336,9 @@ impl GameState {
     self.miners.iter()
   }
 
-  /// Find a minor, if none already designated, to keep around items.
-  fn designate_item_miner(&mut self, needed_item: Option<RequestItem>) {
-    if self.designated_item_miner.is_none() {
-      // we need one; we’ll use the one that is the closest to the left side of the map
-      let mut closest = None;
-
-      for (miner_index, miner) in self.miners().enumerate() {
-        if let Miner::Alive { x, .. } = miner {
-          let x = *x;
-
-          if let Some((ref mut index, ref mut px)) = closest {
-            if x < *px {
-              *index = miner_index;
-              *px = x;
-            }
-          } else {
-            closest = Some((miner_index, x));
-          }
-        }
-      }
-
-      if let Some((index, _)) = closest {
-        self.designated_item_miner = Some(ItemDesignatedMiner {
-          index,
-          needed_item
-        });
-      } else {
-        eprintln!("cannot find a miner to be designated for item");
-      }
-    }
+  fn miner(&self, index: usize) -> Option<&Miner> {
+    self.miners.get(index)
   }
-
-  fn designated_item_miner(&self) -> Option<ItemDesignatedMiner> {
-    self.designated_item_miner
-  }
-}
-
-/// A designated miner to keep around item.
-#[derive(Clone, Copy, Debug)]
-struct ItemDesignatedMiner {
-  // index of the miner
-  index: usize,
-  // item the miner needs; if `None`, it’s waiting for an order
-  needed_item: Option<RequestItem>
 }
 
 /// Describe a single cell on the grid.
@@ -394,15 +358,12 @@ impl Default for Cell {
 }
 
 #[derive(Debug, Eq, Hash, PartialEq)]
-enum Miner {
-  Alive {
-    x: u32,
-    y: u32,
-    item: Option<Item>,
-    uid: UID,
-  },
-
-  Dead
+struct Miner {
+  x: u32,
+  y: u32,
+  item: Option<Item>,
+  uid: UID,
+  alive: bool,
 }
 
 fn main() {
@@ -450,6 +411,9 @@ fn main() {
     let radar_cooldown = parse_input!(inputs[1], u32); // turns left until a new radar can be requested
     let trap_cooldown = parse_input!(inputs[2], u32); // turns left until a new trap can be requested
 
+    game_state.set_radar_cooldown(radar_cooldown);
+    game_state.set_trap_cooldown(trap_cooldown);
+
     for i in 0..entity_count as usize {
       let mut input_line = String::new();
       io::stdin().read_line(&mut input_line).unwrap();
@@ -467,22 +431,24 @@ fn main() {
         // if it’s a miner, add it to the list of miners
         match entity_type {
           EntityType::Miner => {
-            let miner_index = game_state.add_miner(Miner::Alive {
+            let miner_index = game_state.add_miner(Miner {
               x: x as u32,
               y: y as u32,
               item,
-              uid
+              uid,
+              alive: true,
             });
 
             game_state.add_entity(uid, Entity::Miner(miner_index));
           }
 
           EntityType::OpponentMiner => {
-            let opponent_miner_index = game_state.add_opponent_miner(Miner::Alive {
+            let opponent_miner_index = game_state.add_opponent_miner(Miner {
               x: x as u32,
               y: y as u32,
               item,
-              uid
+              uid,
+              alive: true,
             });
 
             game_state.add_entity(uid, Entity::OpponentMiner(opponent_miner_index));
@@ -526,21 +492,8 @@ fn main() {
       }
     }
 
-    game_state.designate_item_miner(Some(RequestItem::Radar));
-
     for (miner_index, miner) in game_state.miners().enumerate() {
-      // check if a miner should try to get something
-      if let Some(designated_item_miner) = game_state.designated_item_miner() {
-        if designated_item_miner.index == miner_index {
-          if designated_item_miner.needed_item.is_none() {
-            Request::Item(RequestItem::Radar).submit();
-          } else {
-            Request::Move(5, 5).submit();
-          }
-        }
-      } else {
-        Request::Move(10, 10).submit();
-      }
+      Request::Wait.submit();
     }
   }
 }
