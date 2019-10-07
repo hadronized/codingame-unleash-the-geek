@@ -33,6 +33,15 @@ impl TryFrom<u32> for EntityType {
   }
 }
 
+/// Entity.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum Entity {
+  Miner(usize),
+  OpponentMiner(usize),
+  BurriedRadar,
+  BurriedTrap,
+}
+
 /// Possible items a miner can hold.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Item {
@@ -134,7 +143,9 @@ struct GameState {
   cells: Vec<Cell>,
   miners: Vec<Miner>,
   opponent_miners: Vec<Miner>,
-  entities: HashMap<UID, EntityType>,
+  entities: HashMap<UID, Entity>,
+  burried_radars: HashMap<UID, [u32; 2]>,
+  burried_traps: HashMap<UID, [u32; 2]>,
 }
 
 impl Default for GameState {
@@ -146,6 +157,8 @@ impl Default for GameState {
       miners: Vec::new(),
       opponent_miners: Vec::new(),
       entities: HashMap::new(),
+      burried_radars: HashMap::new(),
+      burried_traps: HashMap::new(),
     }
   }
 }
@@ -167,12 +180,86 @@ impl GameState {
     self.cells[y * WIDTH + x].has_hole = hole;
   }
 
-  fn add_miner(&mut self, miner: Miner) {
-    self.miners.push(miner);
+  fn add_entity(&mut self, uid: UID, entity: Entity) {
+    self.entities.insert(uid, entity);
   }
 
-  fn add_opponent_miner(&mut self, miner: Miner) {
+  fn entity_exists(&self, uid: UID) -> bool {
+    self.entities.contains_key(&uid)
+  }
+
+  fn add_miner(&mut self, miner: Miner) -> usize {
+    let index = self.miners.len();
+    self.miners.push(miner);
+
+    index
+  }
+
+  fn add_opponent_miner(&mut self, miner: Miner) -> usize {
+    let index = self.opponent_miners.len();
     self.opponent_miners.push(miner);
+
+    index
+  }
+
+  fn update_position(&mut self, uid: UID, px: u32, py: u32) {
+    match self.entities.get(&uid) {
+      Some(Entity::Miner(index)) => {
+        if let Miner::Alive { ref mut x, ref mut y, .. } = self.miners[*index] {
+          *x = px;
+          *y = py;
+        } else {
+          eprintln!("trying to update miner {} position, but it’s dead", uid);
+        }
+      }
+
+      Some(Entity::OpponentMiner(index)) => {
+        if let Miner::Alive { ref mut x, ref mut y, .. } = self.opponent_miners[*index] {
+          *x = px;
+          *y = py;
+        } else {
+          eprintln!("trying to update opponent miner {} position, but it’s dead", uid);
+        }
+      }
+
+      _ => eprintln!("trying to update miner {} position, but it’s not a miner", uid)
+    }
+  }
+
+  fn update_item(&mut self, uid: UID, input_item: Option<Item>) {
+    match self.entities.get(&uid) {
+      Some(Entity::Miner(index)) => {
+        if let Miner::Alive { ref mut item, .. } = self.miners[*index] {
+          *item = input_item;
+        } else {
+          eprintln!("trying to update miner {} item, but it’s dead", uid);
+        }
+      }
+
+      Some(Entity::OpponentMiner(index)) => {
+        if let Miner::Alive { ref mut item, .. } = self.opponent_miners[*index] {
+          *item = input_item;
+        } else {
+          eprintln!("trying to update opponent miner {} item, but it’s dead", uid);
+        }
+      }
+
+      _ => eprintln!("trying to update miner {} item, but it’s not a miner", uid)
+    }
+  }
+
+  fn kill(&mut self, uid: UID) {
+    match self.entities.get(&uid) {
+      Some(Entity::Miner(index)) => {
+        self.miners[*index] = Miner::Dead;
+      }
+
+      Some(Entity::OpponentMiner(index)) => {
+        self.opponent_miners[*index] = Miner::Dead;
+      }
+
+      _ => eprintln!("trying to kill miner {}, but it’s not a miner", uid)
+    }
   }
 }
 
@@ -262,31 +349,47 @@ fn main() {
       let item = parse_input!(inputs[4], u32).try_into().ok(); // if this entity is a robot, the item it is carrying (-1 for NONE, 2 for RADAR, 3 for TRAP, 4 for ORE)
 
       // check if we need to update our entities
-      if !game_state.entities.contains_key(&uid) {
-        // we don’t know that entity yet, add it
-        game_state.entities.insert(uid, entity_type);
-
-        // if it’s a miner, add it to the list of miner
+      if !game_state.entity_exists(uid) {
+        // if it’s a miner, add it to the list of miners
         match entity_type {
           EntityType::Miner => {
-            game_state.add_miner(Miner::Alive {
+            let miner_index = game_state.add_miner(Miner::Alive {
               x: x as u32,
               y: y as u32,
               item,
               uid
             });
+
+            game_state.add_entity(uid, Entity::Miner(miner_index));
           }
 
           EntityType::OpponentMiner => {
-            game_state.add_opponent_miner(Miner::Alive {
+            let opponent_miner_index = game_state.add_opponent_miner(Miner::Alive {
               x: x as u32,
               y: y as u32,
               item,
               uid
             });
+
+            game_state.add_entity(uid, Entity::OpponentMiner(opponent_miner_index));
           }
 
           _ => ()
+        }
+      } else {
+        match entity_type {
+          EntityType::Miner | EntityType::OpponentMiner => {
+            if x == -1 && y == -1 {
+              // this miner is dead
+              game_state.kill(uid);
+            }
+
+            // update position
+            game_state.update_position(uid, x as u32, y as u32);
+
+            // update item
+            game_state.update_item(uid, item);
+          }
         }
       }
     }
