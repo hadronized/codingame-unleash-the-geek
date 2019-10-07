@@ -9,6 +9,11 @@ macro_rules! parse_input {
     ($x:expr, $t:ident) => ($x.trim().parse::<$t>().unwrap())
 }
 
+/// Compute the “cell distance” between two points.
+fn cell_dist(a: [u32; 2], b: [u32; 2]) -> u32 {
+  ((a[0] as f32 - b[0] as f32).powf(2.) + (a[1] as f32 - b[1] as f32).powf(2.)).sqrt() as u32
+}
+
 trait TryFrom<T>: Sized {
   type Error;
 
@@ -118,6 +123,16 @@ impl fmt::Display for Request {
   }
 }
 
+impl Request {
+  fn submit(self) {
+    println!("{}", self);
+  }
+
+  fn back_to_hq(position: [u32; 2]) -> Request {
+    Request::Move(0, position[1])
+  }
+}
+
 /// A request with a possible associated comment.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct OutputRequest {
@@ -157,6 +172,7 @@ type UID = u32;
 
 #[derive(Debug)]
 struct GameState {
+  // informational
   my_score: u32,
   opponent_score: u32,
   cells: Vec<Cell>,
@@ -165,6 +181,9 @@ struct GameState {
   entities: HashMap<UID, Entity>,
   burried_radars: HashMap<UID, [u32; 2]>,
   burried_traps: HashMap<UID, [u32; 2]>,
+
+  // tactical
+  designated_item_miner: Option<ItemDesignatedMiner>, // index of our miner designed to grab item
 }
 
 impl Default for GameState {
@@ -178,6 +197,7 @@ impl Default for GameState {
       entities: HashMap::new(),
       burried_radars: HashMap::new(),
       burried_traps: HashMap::new(),
+      designated_item_miner: None,
     }
   }
 }
@@ -310,6 +330,51 @@ impl GameState {
   fn miners(&self) -> impl Iterator<Item = &Miner> {
     self.miners.iter()
   }
+
+  /// Find a minor, if none already designated, to keep around items.
+  fn designate_item_miner(&mut self, needed_item: Option<RequestItem>) {
+    if self.designated_item_miner.is_none() {
+      // we need one; we’ll use the one that is the closest to the left side of the map
+      let mut closest = None;
+
+      for (miner_index, miner) in self.miners().enumerate() {
+        if let Miner::Alive { x, .. } = miner {
+          let x = *x;
+
+          if let Some((ref mut index, ref mut px)) = closest {
+            if x < *px {
+              *index = miner_index;
+              *px = x;
+            }
+          } else {
+            closest = Some((miner_index, x));
+          }
+        }
+      }
+
+      if let Some((index, _)) = closest {
+        self.designated_item_miner = Some(ItemDesignatedMiner {
+          index,
+          needed_item
+        });
+      } else {
+        eprintln!("cannot find a miner to be designated for item");
+      }
+    }
+  }
+
+  fn designated_item_miner(&self) -> Option<ItemDesignatedMiner> {
+    self.designated_item_miner
+  }
+}
+
+/// A designated miner to keep around item.
+#[derive(Clone, Copy, Debug)]
+struct ItemDesignatedMiner {
+  // index of the miner
+  index: usize,
+  // item the miner needs; if `None`, it’s waiting for an order
+  needed_item: Option<RequestItem>
 }
 
 /// Describe a single cell on the grid.
@@ -461,8 +526,21 @@ fn main() {
       }
     }
 
-    for miner in game_state.miners() {
-      println!("WAIT"); // WAIT|MOVE x y|DIG x y|REQUEST item
+    game_state.designate_item_miner(Some(RequestItem::Radar));
+
+    for (miner_index, miner) in game_state.miners().enumerate() {
+      // check if a miner should try to get something
+      if let Some(designated_item_miner) = game_state.designated_item_miner() {
+        if designated_item_miner.index == miner_index {
+          if designated_item_miner.needed_item.is_none() {
+            Request::Item(RequestItem::Radar).submit();
+          } else {
+            Request::Move(5, 5).submit();
+          }
+        }
+      } else {
+        Request::Move(10, 10).submit();
+      }
     }
   }
 }
