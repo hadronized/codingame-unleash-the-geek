@@ -371,20 +371,24 @@ impl GameState {
         let x = x as i32;
         let y = y as i32;
 
-        if let Some(ore_amount) = cell.ore_amount {
-          if let Some((cx, cy, _)) = closest_cell {
-            if manh_dist([x, y], [miner.x, miner.y]) < manh_dist([cx, cy], [miner.x, miner.y]) {
+        match cell.ore_amount {
+          Some(ore_amount) if ore_amount > 0 => {
+            if let Some((cx, cy, _)) = closest_cell {
+              if manh_dist([x, y], [miner.x, miner.y]) < manh_dist([cx, cy], [miner.x, miner.y]) {
+                closest_cell = Some((x, y, ore_amount));
+              }
+            } else {
               closest_cell = Some((x, y, ore_amount));
             }
-          } else {
-            closest_cell = Some((x, y, ore_amount));
           }
+
+          _ => ()
         }
       }
     }
 
     if let Some((x, y, _)) = closest_cell {
-      Order::GoTo(x, y)
+      Order::DigAt(x, y)
     } else {
       Order::go_to_random(self.width as i32, self.height as i32)
     }
@@ -434,7 +438,13 @@ struct Miner {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Order {
+  /// Move to a given unit.
+  ///
+  /// This is an exploration mode. If a better alternative is found, this unit should abort this
+  /// order.
   GoTo(i32, i32),
+  /// Move to a cell to dig from.
+  DigAt(i32, i32),
   DeployRadarAt(i32, i32),
   Deliver(i32, i32),
 }
@@ -453,8 +463,17 @@ impl Order {
   fn destination(&self) -> [i32; 2] {
     match *self {
       Order::GoTo(x, y) => [x, y],
+      Order::DigAt(x, y) => [x, y],
       Order::DeployRadarAt(x, y) => [x, y],
       Order::Deliver(x, y) => [x, y],
+    }
+  }
+
+  fn is_digging_order(&self) -> bool {
+    if let Order::DigAt(..) = *self {
+      true
+    } else {
+      false
     }
   }
 }
@@ -481,15 +500,15 @@ fn main() {
     game_state.set_my_score(my_score);
     game_state.set_opponent_score(opponent_score);
 
-    for y in 0..height as usize {
+    for y in 0 .. height as usize {
       let mut input_line = String::new();
       io::stdin().read_line(&mut input_line).unwrap();
       let inputs = input_line.split_whitespace().collect::<Vec<_>>();
 
       // we skip x = 0 as it’s HQ
-      for x in 0..width as usize {
-        let ore: Option<usize> = inputs[2*y].trim().parse().ok(); // amount of ore or "?" if unknown
-        let hole = parse_input!(inputs[2 * y + 1], u32) == 1; // 1 if cell has a hole
+      for x in 1 .. width as usize {
+        let ore: Option<usize> = inputs[2 * x].trim().parse().ok(); // amount of ore or "?" if unknown
+        let hole = parse_input!(inputs[2 * x + 1], u32) == 1; // 1 if cell has a hole
 
         game_state.set_ore(x, y, ore);
         game_state.set_hole(x, y, hole);
@@ -587,23 +606,6 @@ fn main() {
       }
     }
 
-    // display the grid on stderr
-    for x in 0 .. width {
-      for y in 0 .. height {
-        let cell = game_state.cell(x, y).unwrap();
-
-        match cell.ore_amount {
-          Some(amount) if amount > 0 => {
-            eprintln!("detected some ore at ({}, {}): {}", x, y, amount);
-          }
-
-          _ => ()
-        }
-      }
-
-      eprintln!();
-    }
-
     // FIXME: idea: burry the radar then unburry it immediately in order to burry it elsewhere
     // select a miner to carry radar if not already there
     if game_state.miner_with_radar.is_none() {
@@ -638,31 +640,51 @@ fn main() {
         }
       } else {
         match miner.order {
-          Order::GoTo(x, y) => {
+          Order::GoTo(x, y) | Order::DigAt(x, y) => {
             if manh_dist([x, y], [miner.x, miner.y]) == 0 {
+              let cell = game_state.cell(x, y).unwrap();
 
               if miner.item == Some(Item::Ore) {
                 // we just digged some ore; get back to the HQ
                 game_state.miners[miner_index].order = Order::Deliver(x, y);
                 Request::back_to_hq([x, y]).submit();
-              } else if game_state.cell(x, y).unwrap().ore_amount.is_some() {
+              } else if cell.ore_amount.is_none() && !cell.has_hole {
+                Request::Dig(x, y).submit();
+              } else if cell.ore_amount.unwrap_or(0) > 0 {
+                // if the current cell has some ore (or if it’s unknown, we assume it as 1)
                 game_state.miners[miner_index].order = Order::Deliver(x, y);
                 Request::Dig(x, y).submit();
               } else {
                 let order = game_state.choose_order(miner_index);
-                let [x, y] = order.destination();
+                let [dx, dy] = order.destination();
 
                 game_state.miners[miner_index].order = order;
 
-                Request::Move(x, y).submit();
+                Request::Move(dx, dy).submit();
               }
             } else {
-              Request::Move(x, y).submit();
+              // if we have a better solution, abort the current order and go dig!
+              let other_order = game_state.choose_order(miner_index);
+              if other_order.is_digging_order() {
+                game_state.miners[miner_index].order = other_order;
+                let [dx, dy] = other_order.destination();
+                Request::Move(dx, dy).submit();
+              } else {
+                Request::Move(x, y).submit();
+              }
             }
           }
 
           Order::Deliver(x, y) => {
-            Request::back_to_hq([x, y]).submit();
+            if x != 0 {
+              Request::back_to_hq([x, y]).submit();
+            } else {
+              let order = game_state.choose_order(miner_index);
+              let [dx, dy] = order.destination();
+              game_state.miners[miner_index].order = order;
+
+              Request::Move(dx, dy).submit();
+            }
           }
 
           _ => unreachable!()
