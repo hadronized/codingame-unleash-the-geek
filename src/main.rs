@@ -464,8 +464,10 @@ impl Order {
   }
 
   fn deploy_radar_to_random(width: i32, height: i32) -> Self {
+    // deploy a radar at a random location; we prevent burrying the radar too close to edges because
+    // it would be a waste
     let mut rng = thread_rng();
-    Order::DeployRadarAt(rng.gen_range(1, width), rng.gen_range(0, height))
+    Order::DeployRadarAt(rng.gen_range(3, width - 3), rng.gen_range(3, height - 3))
   }
 
   fn destination(&self) -> [i32; 2] {

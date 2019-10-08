@@ -33,3 +33,7 @@ Possible enhancements:
 - We can try to burry a radar and unburry it immediately. This will have the effect of allowing to
   explore way quicker but we lose “live” information, so we need to change a bit the way the cells
   store information.
+
+## v0.2
+
+- Radars are now deployed at 3 cells far from edges.
