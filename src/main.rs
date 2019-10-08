@@ -4,6 +4,10 @@ use std::collections::btree_map::Entry;
 use std::fmt;
 use std::io;
 
+/// Threshold of amount of ore we want to have under radars. If we exceed that value, we stop
+/// burrying radars.
+const MIN_ORE_NO_RADAR_NEEDED: usize = 10;
+
 macro_rules! parse_input {
     ($x:expr, $t:ident) => ($x.trim().parse::<$t>().unwrap())
 }
@@ -688,7 +692,7 @@ fn main() {
     if game_state.radar_cooldown == 0
       && game_state.miner_with_radar.is_none()
       && game_state.burried_radars.len() < 10
-      && game_state.visible_ore_amount() < 20
+      && game_state.visible_ore_amount() < MIN_ORE_NO_RADAR_NEEDED
     {
       game_state.assign_radar();
     }

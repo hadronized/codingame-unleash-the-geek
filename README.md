@@ -4,18 +4,18 @@
 
 For this first version, I wanted:
 
-- To discover the game mechanics around mining.
-- Have a single unit handling radars. That miner is not necessarily the same one every time.
+- [x] To discover the game mechanics around mining.
+- [x] Have a single unit handling radars. That miner is not necessarily the same one every time.
   instead, I pick the “best” one when I need a radar (i.e. it’s the one nearest a HQ cell) then
   dispatch it to grab a radar and deploy it at a random location. I don’t take cooldown into account
   so far.
-- All other units are dispatched according to a simple rule:
+- [x] All other units are dispatched according to a simple rule:
   - If we have ore information, we know for sure that some ore is availble, so we take the nearest
     ore cell to the miner and dispatch the miner to dig there.
   - If no ore information is available (typical when starting the game), we go in a complete random
     location.
-- When a unit either burries a radar or digs, if it has found ore, it immediately goes back to HQ.
-- We don’t use traps at all so far nor we defend against enemies nor attack them. Our current
+- [x] When a unit either burries a radar or digs, if it has found ore, it immediately goes back to HQ.
+- [x] We don’t use traps at all so far nor we defend against enemies nor attack them. Our current
   strategy is mining first and multiplying the number of radars we dig. No defence / attack
   strategy for v1.0.
 
@@ -36,10 +36,11 @@ Possible enhancements:
 
 ## v0.2
 
-- Radars are now deployed in a pattern using even / odd sequences in order to tightly map the whole
+- [x] Radars are now deployed in a pattern using even / odd sequences in order to tightly map the whole
   grid. That pattern is optimized and hard-coded for 30×15 grids so if we need to change later for
   other maps, we’ll have to come up with a formula.
-- The radar-miner can now be dismissed if we know “enough” ore veins. I’m still playing with the
+- [x] The radar-miner can now be dismissed if we know “enough” ore veins. I’m still playing with the
   value but started at 20 ore units. Also, I stop burrying radars if the number of radars goes up to
   ten. This is a potential flaw: if an ennemy destroys one of my radar, I’ll have to detect it and
   replace it if it’s needed, but currently, we don’t care (I think).
+- [ ] Detect when a player burry a trap. We need to think how we’re supposed to detect that.
