@@ -47,3 +47,4 @@ Possible enhancements:
   should be doable by storing the last position of every enemy unit along with its speed: if the
   last speed was 0 and the enemy is now moving straight to the left, it’s very likely the previous
   cell was an ore vein.
+- [ ] Enemies that stop at x = 0 “might” be carrying something. We need to take that into account.
