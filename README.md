@@ -36,4 +36,10 @@ Possible enhancements:
 
 ## v0.2
 
-- Radars are now deployed at 3 cells far from edges.
+- Radars are now deployed in a pattern using even / odd sequences in order to tightly map the whole
+  grid. That pattern is optimized and hard-coded for 30×15 grids so if we need to change later for
+  other maps, we’ll have to come up with a formula.
+- The radar-miner can now be dismissed if we know “enough” ore veins. I’m still playing with the
+  value but started at 20 ore units. Also, I stop burrying radars if the number of radars goes up to
+  ten. This is a potential flaw: if an ennemy destroys one of my radar, I’ll have to detect it and
+  replace it if it’s needed, but currently, we don’t care (I think).

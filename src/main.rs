@@ -1,5 +1,6 @@
 use rand::{Rng, thread_rng};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::collections::btree_map::Entry;
 use std::fmt;
 use std::io;
 
@@ -341,6 +342,60 @@ impl GameState {
     self.cells.get(y as usize * self.width + x as usize)
   }
 
+  // Find the next spot where to put a radar.
+  fn find_best_radar_spot(&self) -> Option<[i32; 2]> {
+    // the algorithm is simple: we start at HQ and we want to put a radar at a distance of 5 from
+    // the HQ so that the last detected cell left to the radar will be 1-cell away from the HQ; the
+    // idea is to add pairs of radars for each x; we use a priority queue to quickly get the
+    // furthest x pair and see whether we need to add a radar there
+
+    // we get the “furthest” radars we’ve placed so far and get the number of radars per x distance
+    // to HQ; we then get the furthest and if its count is < 2, we place our spot there
+    let mut furthest = BTreeMap::<i32, usize>::new();
+    for (_, radar) in &self.burried_radars {
+      match furthest.entry(radar[0]) {
+        Entry::Vacant(v) => {
+          v.insert(1);
+        }
+
+        Entry::Occupied(mut v) => {
+          *v.get_mut() += 1;
+        }
+      }
+    }
+
+    // get the furthest pair
+    if let Some((&fx, &count)) = furthest.iter().next_back() {
+      eprintln!("furthest burried radar is {} ({} occurrences)", fx, count);
+
+      let col = fx / 4;
+
+      if col % 2 == 0 {
+        // even column; it means two radars
+        if count == 1 {
+          // the first radar is always at north, so place the second at south
+          Some([fx, 11])
+        } else if count == 2 {
+          // two radars, so the next one is on the next column and is alone
+          Some([fx + 4, 7])
+        } else {
+          None
+        }
+      } else {
+        // odd column; it means one radar
+        if count == 1 {
+          // radar already there, so the next is on north on a pair
+          Some([fx + 4, 3])
+        } else {
+          None
+        }
+      }
+    } else {
+      // we have no radar yet; first radar is easy to place
+      Some([4, 7])
+    }
+  }
+
   fn assign_radar(&mut self) {
     // keep track of the best choice (i.e. the one nearest y ÷ 2)
     let mut found = None;
@@ -360,7 +415,13 @@ impl GameState {
 
     let (index, _) = found.unwrap();
     self.miner_with_radar = Some(index);
-    self.miners[index].order = Order::deploy_radar_to_random(self.width as i32, self.height as i32);
+    //self.miners[index].order = Order::deploy_radar_to_random(self.width as i32, self.height as i32);
+
+    // instead, we have already access to our burried radars, so let’s just find the next step; each
+    // radar has a radius of 4 units, hence 8 units. The map is 15-cells tall so we just need, in
+    // theory, two radars per column
+    let [radar_x, radar_y] = self.find_best_radar_spot().unwrap();
+    self.miners[index].order = Order::DeployRadarAt(radar_x, radar_y);
   }
 
   /// Find the most appealing order to follow.
@@ -400,6 +461,11 @@ impl GameState {
     } else {
       Order::go_to_random(self.width as i32, self.height as i32)
     }
+  }
+
+  /// Total amount of ore we know about.
+  fn visible_ore_amount(&self) -> usize {
+    self.cells.iter().map(|cell| cell.ore_amount.unwrap_or(0)).sum()
   }
 }
 
@@ -463,9 +529,9 @@ impl Order {
     Order::GoTo(rng.gen_range(1, width), rng.gen_range(0, height))
   }
 
+  /// Deploy a radar at a random location; we prevent burrying the radar too close to edges because
+  /// it would be a waste.
   fn deploy_radar_to_random(width: i32, height: i32) -> Self {
-    // deploy a radar at a random location; we prevent burrying the radar too close to edges because
-    // it would be a waste
     let mut rng = thread_rng();
     Order::DeployRadarAt(rng.gen_range(3, width - 3), rng.gen_range(3, height - 3))
   }
@@ -579,6 +645,7 @@ fn main() {
           }
 
           EntityType::BurriedRadar => {
+            eprintln!("new burried radar at ({}, {})", x, y);
             game_state.add_entity(uid, Entity::BurriedRadar);
             game_state.burry_radar(uid, x, y);
           }
@@ -618,7 +685,11 @@ fn main() {
 
     // FIXME: idea: burry the radar then unburry it immediately in order to burry it elsewhere
     // select a miner to carry radar if not already there
-    if game_state.miner_with_radar.is_none() {
+    if game_state.radar_cooldown == 0
+      && game_state.miner_with_radar.is_none()
+      && game_state.burried_radars.len() < 10
+      && game_state.visible_ore_amount() < 20
+    {
       game_state.assign_radar();
     }
 
