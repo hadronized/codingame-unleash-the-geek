@@ -126,6 +126,10 @@ impl Request {
     println!("{}", self);
   }
 
+  fn comment<S>(self, msg: S) -> RequestComment where S: Into<String> {
+    RequestComment::new(self, Some(msg.into()))
+  }
+
   fn back_to_hq(position: [i32; 2]) -> Request {
     Request::Move(0, position[1])
   }
@@ -133,27 +137,31 @@ impl Request {
 
 /// A request with a possible associated comment.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct OutputRequest {
+struct RequestComment {
   req: Request,
   comment: Option<String>
 }
 
-impl OutputRequest {
+impl RequestComment {
   fn new<C>(req: Request, comment: C) -> Self where C: Into<Option<String>> {
-    OutputRequest {
+    RequestComment {
       req,
       comment: comment.into()
     }
   }
-}
 
-impl From<Request> for OutputRequest {
-  fn from(req: Request) -> Self {
-    OutputRequest::new(req, None)
+  fn submit(self) {
+    println!("{}", self);
   }
 }
 
-impl fmt::Display for OutputRequest {
+impl From<Request> for RequestComment {
+  fn from(req: Request) -> Self {
+    RequestComment::new(req, None)
+  }
+}
+
+impl fmt::Display for RequestComment {
   fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
     write!(f, "{}", self.req)?;
 
@@ -642,6 +650,7 @@ fn main() {
         match miner.order {
           Order::GoTo(x, y) | Order::DigAt(x, y) => {
             if manh_dist([x, y], [miner.x, miner.y]) == 0 {
+              // we arrived at our destination, so let’s inspect the cell
               let cell = game_state.cell(x, y).unwrap();
 
               if miner.item == Some(Item::Ore) {
@@ -649,12 +658,14 @@ fn main() {
                 game_state.miners[miner_index].order = Order::Deliver(x, y);
                 Request::back_to_hq([x, y]).submit();
               } else if cell.ore_amount.is_none() && !cell.has_hole {
+                // case of an unknown cell with no hole; we are there so we just dig to check
                 Request::Dig(x, y).submit();
               } else if cell.ore_amount.unwrap_or(0) > 0 {
-                // if the current cell has some ore (or if it’s unknown, we assume it as 1)
+                // the current cell the current cell has some ore so we dig it
                 game_state.miners[miner_index].order = Order::Deliver(x, y);
                 Request::Dig(x, y).submit();
               } else {
+                // the current cell has no ore and it’s already digged; let’s get another order
                 let order = game_state.choose_order(miner_index);
                 let [dx, dy] = order.destination();
 
@@ -663,27 +674,36 @@ fn main() {
                 Request::Move(dx, dy).submit();
               }
             } else {
-              // if we have a better solution, abort the current order and go dig!
+              // we still have to travel to our cell, but we still look for better solution, because
+              // maybe a radar has been burried and we should change our orderh;, abort the current
+              // order and go dig in that case!
               let other_order = game_state.choose_order(miner_index);
               if other_order.is_digging_order() {
+                // in theory, this order should be the same as ours if it’s not optimal; if it gets
+                // optimal, we’ll move to a closer location
                 game_state.miners[miner_index].order = other_order;
                 let [dx, dy] = other_order.destination();
                 Request::Move(dx, dy).submit();
               } else {
+                // we haven’t found a better solution so let’s keep going
                 Request::Move(x, y).submit();
               }
             }
           }
 
           Order::Deliver(x, y) => {
-            if x != 0 {
-              Request::back_to_hq([x, y]).submit();
+            if miner.x != 0 {
+              Request::back_to_hq([x, y])
+                .comment("going back to HQ!")
+                .submit();
             } else {
               let order = game_state.choose_order(miner_index);
               let [dx, dy] = order.destination();
               game_state.miners[miner_index].order = order;
 
-              Request::Move(dx, dy).submit();
+              Request::Move(dx, dy)
+                .comment("changing order!")
+                .submit();
             }
           }
 
