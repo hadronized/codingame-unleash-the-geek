@@ -471,6 +471,18 @@ impl GameState {
   fn visible_ore_amount(&self) -> usize {
     self.cells.iter().map(|cell| cell.ore_amount.unwrap_or(0)).sum()
   }
+
+  /// Prepare the next turn by updating what must be updated.
+  fn setup_next_turn(&mut self) {
+    // update “previous” position of miners to be able to compute velocities
+    for miner in &mut self.miners {
+      miner.prev_xy = Some([miner.x, miner.y]);
+    }
+
+    for miner in &mut self.opponent_miners {
+      miner.prev_xy = Some([miner.x, miner.y]);
+    }
+  }
 }
 
 /// Describe a single cell on the grid.
@@ -508,10 +520,19 @@ impl fmt::Display for Cell {
 struct Miner {
   x: i32,
   y: i32,
+  prev_xy: Option<[i32; 2]>,
   item: Option<Item>,
   uid: UID,
   alive: bool,
   order: Order,
+}
+
+impl Miner {
+  /// Velocity of the miner as a gradient.
+  fn velocity_gradient(&self) -> [i32; 2] {
+    let [px, py] = self.prev_xy.unwrap_or([self.x, self.y]);
+    [self.x - px, self.y - py]
+  }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -626,6 +647,7 @@ fn main() {
             let miner_index = game_state.add_miner(Miner {
               x,
               y,
+              prev_xy: None,
               item,
               uid,
               alive: true,
@@ -639,6 +661,7 @@ fn main() {
             let opponent_miner_index = game_state.add_opponent_miner(Miner {
               x,
               y,
+              prev_xy: None,
               item,
               uid,
               alive: true,
@@ -700,7 +723,7 @@ fn main() {
     for miner_index in 0 .. game_state.miners.len() {
       let miner = game_state.miners[miner_index].clone();
 
-      if Some(miner_index) == game_state.miner_with_radar {
+      let request = if Some(miner_index) == game_state.miner_with_radar {
         if let Order::DeployRadarAt(x, y) = miner.order {
           if miner.item == Some(Item::Radar) {
             // if that unit has already the radar
@@ -708,20 +731,20 @@ fn main() {
               // if we arrived at destination, just burry the radar
               game_state.miner_with_radar = None;
               game_state.miners[miner_index].order = game_state.choose_order(miner_index);
-              Request::Dig(x, y).submit();
+              Request::Dig(x, y)
             } else {
               // otherwise, go there
-              Request::Move(x, y).submit();
+              Request::Move(x, y)
             }
           } else if miner.x != 0 {
             // go home to ask for a radar
-            Request::back_to_hq([miner.x, miner.y]).submit();
+            Request::back_to_hq([miner.x, miner.y])
           } else {
             // ask a radar
-            Request::Item(RequestItem::Radar).submit();
+            Request::Item(RequestItem::Radar)
           }
         } else {
-          unreachable!();
+          unreachable!()
         }
       } else {
         match miner.order {
@@ -733,14 +756,14 @@ fn main() {
               if miner.item == Some(Item::Ore) {
                 // we just digged some ore; get back to the HQ
                 game_state.miners[miner_index].order = Order::Deliver(x, y);
-                Request::back_to_hq([x, y]).submit();
+                Request::back_to_hq([x, y])
               } else if cell.ore_amount.is_none() && !cell.has_hole {
                 // case of an unknown cell with no hole; we are there so we just dig to check
-                Request::Dig(x, y).submit();
+                Request::Dig(x, y)
               } else if cell.ore_amount.unwrap_or(0) > 0 {
                 // the current cell the current cell has some ore so we dig it
                 game_state.miners[miner_index].order = Order::Deliver(x, y);
-                Request::Dig(x, y).submit();
+                Request::Dig(x, y)
               } else {
                 // the current cell has no ore and it’s already digged; let’s get another order
                 let order = game_state.choose_order(miner_index);
@@ -748,7 +771,7 @@ fn main() {
 
                 game_state.miners[miner_index].order = order;
 
-                Request::Move(dx, dy).submit();
+                Request::Move(dx, dy)
               }
             } else {
               // we still have to travel to our cell, but we still look for better solution, because
@@ -760,10 +783,10 @@ fn main() {
                 // optimal, we’ll move to a closer location
                 game_state.miners[miner_index].order = other_order;
                 let [dx, dy] = other_order.destination();
-                Request::Move(dx, dy).submit();
+                Request::Move(dx, dy)
               } else {
                 // we haven’t found a better solution so let’s keep going
-                Request::Move(x, y).submit();
+                Request::Move(x, y)
               }
             }
           }
@@ -771,22 +794,22 @@ fn main() {
           Order::Deliver(x, y) => {
             if miner.x != 0 {
               Request::back_to_hq([x, y])
-                .comment("going back to HQ!")
-                .submit();
             } else {
               let order = game_state.choose_order(miner_index);
               let [dx, dy] = order.destination();
               game_state.miners[miner_index].order = order;
 
               Request::Move(dx, dy)
-                .comment("changing order!")
-                .submit();
             }
           }
 
           _ => unreachable!()
         }
-      }
+      };
+
+      request.comment(format!("Δ=({:?}", miner.velocity_gradient())).submit();
     }
+
+    game_state.setup_next_turn();
   }
 }
