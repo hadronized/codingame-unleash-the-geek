@@ -33,6 +33,9 @@ Possible enhancements:
 - We can try to burry a radar and unburry it immediately. This will have the effect of allowing to
   explore way quicker but we lose “live” information, so we need to change a bit the way the cells
   store information.
+- Radars should be placed near first and we should be smarter about “area awareness.” Currently, we
+  are doing them randomly so the first radar might be very far, which is not really a good idea
+  (i.e. if the opponent implements a nearest-first approach, they will grab that ore before me).
 
 ## v0.2
 
