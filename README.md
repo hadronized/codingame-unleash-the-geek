@@ -56,3 +56,11 @@ Possible enhancements:
 - [ ] When no ore data is available, we shouldn’t go too far away to unburry.
 - [ ] Handle overcrowded ore cell dispatch.
 - [x] Abort mission if we’ve detected a trap has been placed AFTER our order was dispatched.
+
+## v0.3
+
+- [ ] When no ore data is available, we shouldn’t go too far away to unburry.
+- [ ] Handle overcrowded ore cell dispatch.
+- [x] We can untag dangerous cell and make them safe back by storing the amount of ore for each
+  dangerous zone: at every turn, we look at each bad zone and check whether the value has decreased.
+  If so, it means that the enemy has been digging in it and then it’s safe.

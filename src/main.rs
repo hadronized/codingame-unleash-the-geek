@@ -210,7 +210,7 @@ struct GameState {
   // tactical
   miner_with_radar: Option<usize>,
   dangerous_opponents: HashSet<usize>,
-  dangerous_cells: HashSet<[i32; 2]>,
+  dangerous_cells: HashMap<[i32; 2], Cell>,
 }
 
 impl GameState {
@@ -230,7 +230,7 @@ impl GameState {
       trap_cooldown: 0,
       miner_with_radar: None,
       dangerous_opponents: HashSet::new(),
-      dangerous_cells: HashSet::new(),
+      dangerous_cells: HashMap::new(),
     }
   }
 
@@ -417,19 +417,16 @@ impl GameState {
   }
 
   fn assign_radar(&mut self) {
-    // keep track of the best choice (i.e. the one nearest y ÷ 2)
+    // keep track of the best choice
     let mut found = None;
-    let middle = self.height / 2;
 
     for (miner_index, miner) in self.miners().enumerate() {
-      let dist = (miner.y - middle as i32).abs();
-
       if let Some((_, found_dist)) = found {
-        if dist < found_dist {
-          found = Some((miner_index, dist));
+        if miner.x < found_dist {
+          found = Some((miner_index, miner.x));
         }
       } else {
-        found = Some((miner_index, dist));
+        found = Some((miner_index, miner.x));
       }
     }
 
@@ -598,9 +595,25 @@ impl GameState {
    }
   }
 
-  /// Check if a cell is dangerous.
+  /// Check whether a cell is dangerous.
   fn is_cell_dangerous(&self, x: i32, y: i32) -> bool {
-    self.dangerous_cells.contains(&[x, y])
+    self.dangerous_cells.contains_key(&[x, y])
+  }
+
+  /// Tag dangerous cells safe if we’re sure they’re not dangerous anymore.
+  fn retag_safe_cells(&mut self) {
+    let cells = &self.cells;
+    let width = self.width;
+
+    self.dangerous_cells.retain(|[dx, dy], dangerous_cell| {
+      // a cell is dangerous only if the current amount of ore is still the same number as when it
+      // was marked dangerous
+      let r = cells[*dy as usize * width + *dx as usize].ore_amount == dangerous_cell.ore_amount;
+      if !r {
+        eprintln!("cell ({}, {}) is actually safe!", dx, dy);
+      }
+      r
+    });
   }
 }
 
@@ -844,6 +857,8 @@ fn main() {
       }
     }
 
+    game_state.retag_safe_cells();
+
     // try to detect if an opponent is asking for an item
     for miner_index in 0 .. game_state.opponent_miners.len() {
       let miner = game_state.opponent_miners[miner_index].clone();
@@ -857,25 +872,23 @@ fn main() {
           } else if game_state.dangerous_opponents.contains(&miner_index) {
             game_state.dangerous_opponents.remove(&miner_index);
 
-            eprintln!("{} -> might be burying a radar or a trap!", miner_index);
+            eprintln!("{} -> might be burying a radar or a trap around ({}, {})!", miner_index, miner.x, miner.y);
 
             // maybe the trap is on the current player position
-            if game_state.cell(miner.x, miner.y).unwrap().has_hole {
-              game_state.dangerous_cells.insert([miner.x, miner.y]);
-            }
+            let cell = game_state.cell(miner.x, miner.y).unwrap().clone();
+            eprintln!("({}, {}) is dangerous", miner.x, miner.y);
+            game_state.dangerous_cells.insert([miner.x, miner.y], cell);
 
             // we add the whole cross as dangerous too, which is very “defensive” but whatever
-            for i in -1 .. 1 {
-              if let Some(cell) = game_state.cell(miner.x + i, miner.y) {
-                if cell.has_hole {
-                  game_state.dangerous_cells.insert([miner.x + i, miner.y]);
-                }
+            for i in &[-1, 1] {
+              if let Some(cell) = game_state.cell(miner.x + i, miner.y).cloned() {
+                eprintln!("({}, {}) is dangerous", miner.x + i, miner.y);
+                game_state.dangerous_cells.insert([miner.x + i, miner.y], cell);
               }
 
-              if let Some(cell) = game_state.cell(miner.x, miner.y + i) {
-                if cell.has_hole {
-                  game_state.dangerous_cells.insert([miner.x, miner.y + i]);
-                }
+              if let Some(cell) = game_state.cell(miner.x, miner.y + i).cloned() {
+                eprintln!("({}, {}) is dangerous", miner.x, miner.y + i);
+                game_state.dangerous_cells.insert([miner.x, miner.y + i], cell);
               }
             }
           }
@@ -904,7 +917,7 @@ fn main() {
               // if we arrived at destination, just burry the radar
               game_state.miner_with_radar = None;
               game_state.miners[miner_index].order = game_state.choose_order(miner_index);
-              Request::Dig(x, y)
+              Request::Dig(x, y) // FIXME: UNSAFE IF TRAP
             } else {
               // otherwise, go there
               Request::Move(x, y)
