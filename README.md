@@ -50,4 +50,8 @@ Possible enhancements:
   should be doable by storing the last position of every enemy unit along with its speed: if the
   last speed was 0 and the enemy is now moving straight to the left, it’s very likely the previous
   cell was an ore vein.
-- [ ] Enemies that stop at x = 0 “might” be carrying something. We need to take that into account.
+- [x] Enemies that stop at x = 0 “might” be carrying something. We need to take that into account.
+- [x] Fix when a miner would bury something. In v0.1, a miner would wait until it has hit the cell
+  while now, it starts digging as soon as it’s “near” enough.
+- [ ] When no ore data is available, we shouldn’t go too far away to unburry.
+- [ ] Handle overcrowded ore cell dispatch.

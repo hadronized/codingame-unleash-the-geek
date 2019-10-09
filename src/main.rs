@@ -17,6 +17,12 @@ fn manh_dist(a: [i32; 2], b: [i32; 2]) -> i32 {
   (a[0] - b[0]).abs() + (a[1] - b[1]).abs()
 }
 
+/// Check if a cell is at range with another cell — i.e. the Manhattan distance is ≤ 1 or it’s a
+/// neighbour.
+fn is_cell_at_range(a: [i32; 2], b: [i32; 2]) -> bool {
+   (a[0] == b[0] || a[1] == b[1]) && manh_dist(a, b) <= 1
+}
+
 trait TryFrom<T>: Sized {
   type Error;
 
@@ -343,7 +349,11 @@ impl GameState {
   }
 
   fn cell(&self, x: i32, y: i32) -> Option<&Cell> {
-    self.cells.get(y as usize * self.width + x as usize)
+    if x < 0 || x >= self.width as i32 || y < 0 || y >= self.height as i32 {
+      None
+    } else {
+      self.cells.get(y as usize * self.width + x as usize)
+    }
   }
 
   // Find the next spot where to put a radar.
@@ -370,8 +380,6 @@ impl GameState {
 
     // get the furthest pair
     if let Some((&fx, &count)) = furthest.iter().next_back() {
-      eprintln!("furthest burried radar is {} ({} occurrences)", fx, count);
-
       let col = fx / 4;
 
       if col % 2 == 0 {
@@ -461,7 +469,31 @@ impl GameState {
     }
 
     if let Some((x, y, _)) = closest_cell {
-      Order::DigAt(x, y)
+      // we don’t really want to go to that cell directly; we want to dig “nearest” to that cell;
+      // this part of code finds the solution to that problem
+      let mut solution = [x, y];
+
+      eprintln!("{}: found solution ({}, {}) (I’m at ({}, {}))", miner_index, x, y, miner.x, miner.y);
+
+      for i in &[-1, 1] {
+        let candidate = [x + i, y];
+        if self.cell(candidate[0], candidate[1]).is_some() {
+          if manh_dist([miner.x, miner.y], candidate) < manh_dist([miner.x, miner.y], solution) {
+            solution = candidate;
+          }
+        }
+
+        let candidate = [x, y + i];
+        if self.cell(candidate[0], candidate[1]).is_some() {
+          if manh_dist([miner.x, miner.y], candidate) < manh_dist([miner.x, miner.y], solution) {
+            solution = candidate;
+          }
+        }
+      }
+
+      eprintln!("{}: -> digging at ({}, {})", miner_index, solution[0], solution[1]);
+
+      Order::DigAt(x, y, solution[0], solution[1])
     } else {
       Order::go_to_random(self.width as i32, self.height as i32)
     }
@@ -482,6 +514,52 @@ impl GameState {
     for miner in &mut self.opponent_miners {
       miner.prev_xy = Some([miner.x, miner.y]);
     }
+  }
+
+  /// Implement digging go-to-like orders.
+  fn order_go_to(&mut self, miner_index: usize, x: i32, y: i32, dig_x: i32, dig_y: i32) -> Request {
+    let miner = self.miners[miner_index].clone();
+
+    if manh_dist([x, y], [miner.x, miner.y]) == 0 {
+      // we arrived at our destination, so let’s inspect the cell
+      let cell = self.cell(dig_x, dig_y).unwrap();
+
+      if miner.item == Some(Item::Ore) {
+        // we just digged some ore; get back to the HQ
+        self.miners[miner_index].order = Order::Deliver(miner.x, miner.y);
+        Request::back_to_hq([miner.x, miner.y])
+      } else if cell.ore_amount.is_none() && !cell.has_hole {
+        // case of an unknown cell with no hole; we are there so we just dig to check
+        Request::Dig(dig_x, dig_y)
+      } else if cell.ore_amount.unwrap_or(0) > 0 {
+        // the current cell the current cell has some ore so we dig it
+        self.miners[miner_index].order = Order::Deliver(miner.x, miner.y);
+        Request::Dig(dig_x, dig_y)
+      } else {
+        // the current cell has no ore and it’s already digged; let’s get another order
+        let order = self.choose_order(miner_index);
+        let [dx, dy] = order.destination();
+
+        self.miners[miner_index].order = order;
+
+        Request::Move(dx, dy)
+      }
+    } else {
+      // we still have to travel to our cell, but we still look for better solution, because
+      // maybe a radar has been burried and we should change our orderh;, abort the current
+      // order and go dig in that case!
+      let other_order = self.choose_order(miner_index);
+      if other_order.is_digging_order()
+        && manh_dist([miner.x, miner.y], other_order.destination()) < manh_dist([miner.x, miner.y], [x, y]) {
+          // if it gets optimal, we’ll move to a closer location
+          self.miners[miner_index].order = other_order;
+          let [dx, dy] = other_order.destination();
+          Request::Move(dx, dy)
+      } else {
+        // we haven’t found a better solution so let’s keep going
+        Request::Move(x, y)
+      }
+   }
   }
 }
 
@@ -543,7 +621,10 @@ enum Order {
   /// order.
   GoTo(i32, i32),
   /// Move to a cell to dig from.
-  DigAt(i32, i32),
+  ///
+  /// The first two i32 is the actual ore cell to dig. The last two i32 is the cell from which
+  /// we should dig (the destination).
+  DigAt(i32, i32, i32, i32),
   DeployRadarAt(i32, i32),
   Deliver(i32, i32),
 }
@@ -564,7 +645,7 @@ impl Order {
   fn destination(&self) -> [i32; 2] {
     match *self {
       Order::GoTo(x, y) => [x, y],
-      Order::DigAt(x, y) => [x, y],
+      Order::DigAt(_, _, x, y) => [x, y],
       Order::DeployRadarAt(x, y) => [x, y],
       Order::Deliver(x, y) => [x, y],
     }
@@ -590,6 +671,8 @@ fn main() {
   let mut game_state = GameState::new(width as usize, height as usize);
 
   // game loop
+  let mut turn: usize = 0;
+
   loop {
     let mut input_line = String::new();
     io::stdin().read_line(&mut input_line).unwrap();
@@ -672,7 +755,6 @@ fn main() {
           }
 
           EntityType::BurriedRadar => {
-            eprintln!("new burried radar at ({}, {})", x, y);
             game_state.add_entity(uid, Entity::BurriedRadar);
             game_state.burry_radar(uid, x, y);
           }
@@ -710,6 +792,22 @@ fn main() {
       }
     }
 
+    // try to detect if an opponent is asking for an item
+    for miner_index in 0 .. game_state.opponent_miners.len() {
+      let miner = game_state.opponent_miners[miner_index].clone();
+
+      // we don’t do anything at the first round since velocity gradients are not yet computed
+      if turn != 0 {
+        if miner.velocity_gradient() == [0, 0] {
+          eprintln!("enemy at ({}, {}) is doing something fishy!", miner.x, miner.y);
+
+          if miner.x == 0 {
+            eprintln!("-> might be asking for an item!");
+          }
+        }
+      }
+    }
+
     // FIXME: idea: burry the radar then unburry it immediately in order to burry it elsewhere
     // select a miner to carry radar if not already there
     if game_state.radar_cooldown == 0
@@ -727,7 +825,7 @@ fn main() {
         if let Order::DeployRadarAt(x, y) = miner.order {
           if miner.item == Some(Item::Radar) {
             // if that unit has already the radar
-            if manh_dist([x, y], [miner.x, miner.y]) == 0 {
+            if is_cell_at_range([x, y], [miner.x, miner.y]) {
               // if we arrived at destination, just burry the radar
               game_state.miner_with_radar = None;
               game_state.miners[miner_index].order = game_state.choose_order(miner_index);
@@ -748,52 +846,17 @@ fn main() {
         }
       } else {
         match miner.order {
-          Order::GoTo(x, y) | Order::DigAt(x, y) => {
-            if manh_dist([x, y], [miner.x, miner.y]) == 0 {
-              // we arrived at our destination, so let’s inspect the cell
-              let cell = game_state.cell(x, y).unwrap();
+          Order::GoTo(x, y) => {
+            game_state.order_go_to(miner_index, x, y, x, y)
+          }
 
-              if miner.item == Some(Item::Ore) {
-                // we just digged some ore; get back to the HQ
-                game_state.miners[miner_index].order = Order::Deliver(x, y);
-                Request::back_to_hq([x, y])
-              } else if cell.ore_amount.is_none() && !cell.has_hole {
-                // case of an unknown cell with no hole; we are there so we just dig to check
-                Request::Dig(x, y)
-              } else if cell.ore_amount.unwrap_or(0) > 0 {
-                // the current cell the current cell has some ore so we dig it
-                game_state.miners[miner_index].order = Order::Deliver(x, y);
-                Request::Dig(x, y)
-              } else {
-                // the current cell has no ore and it’s already digged; let’s get another order
-                let order = game_state.choose_order(miner_index);
-                let [dx, dy] = order.destination();
-
-                game_state.miners[miner_index].order = order;
-
-                Request::Move(dx, dy)
-              }
-            } else {
-              // we still have to travel to our cell, but we still look for better solution, because
-              // maybe a radar has been burried and we should change our orderh;, abort the current
-              // order and go dig in that case!
-              let other_order = game_state.choose_order(miner_index);
-              if other_order.is_digging_order() {
-                // in theory, this order should be the same as ours if it’s not optimal; if it gets
-                // optimal, we’ll move to a closer location
-                game_state.miners[miner_index].order = other_order;
-                let [dx, dy] = other_order.destination();
-                Request::Move(dx, dy)
-              } else {
-                // we haven’t found a better solution so let’s keep going
-                Request::Move(x, y)
-              }
-            }
+          Order::DigAt(dig_x, dig_y, x, y) => {
+            game_state.order_go_to(miner_index, x, y, dig_x, dig_y)
           }
 
           Order::Deliver(x, y) => {
             if miner.x != 0 {
-              Request::back_to_hq([x, y])
+              Request::back_to_hq([miner.x, miner.y])
             } else {
               let order = game_state.choose_order(miner_index);
               let [dx, dy] = order.destination();
@@ -811,5 +874,6 @@ fn main() {
     }
 
     game_state.setup_next_turn();
+    turn += 1;
   }
 }
