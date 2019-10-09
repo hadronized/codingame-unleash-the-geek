@@ -46,7 +46,7 @@ Possible enhancements:
   value but started at 20 ore units. Also, I stop burrying radars if the number of radars goes up to
   ten. This is a potential flaw: if an ennemy destroys one of my radar, I’ll have to detect it and
   replace it if it’s needed, but currently, we don’t care (I think).
-- [ ] Detect when a player burry a trap. We need to think how we’re supposed to detect that. It
+- [x] Detect when a player burries a trap. We need to think how we’re supposed to detect that. It
   should be doable by storing the last position of every enemy unit along with its speed: if the
   last speed was 0 and the enemy is now moving straight to the left, it’s very likely the previous
   cell was an ore vein.
@@ -55,3 +55,4 @@ Possible enhancements:
   while now, it starts digging as soon as it’s “near” enough.
 - [ ] When no ore data is available, we shouldn’t go too far away to unburry.
 - [ ] Handle overcrowded ore cell dispatch.
+- [x] Abort mission if we’ve detected a trap has been placed AFTER our order was dispatched.

@@ -1,5 +1,5 @@
 use rand::{Rng, thread_rng};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::collections::btree_map::Entry;
 use std::fmt;
 use std::io;
@@ -7,6 +7,10 @@ use std::io;
 /// Threshold of amount of ore we want to have under radars. If we exceed that value, we stop
 /// burrying radars.
 const MIN_ORE_NO_RADAR_NEEDED: usize = 10;
+
+/// Maximum number of times a miner will try to pick a safe random destination before actually
+/// staying where it is.
+const MAX_RANDOM_SAFE_DEST_TRIES: usize = 10;
 
 macro_rules! parse_input {
     ($x:expr, $t:ident) => ($x.trim().parse::<$t>().unwrap())
@@ -205,6 +209,8 @@ struct GameState {
 
   // tactical
   miner_with_radar: Option<usize>,
+  dangerous_opponents: HashSet<usize>,
+  dangerous_cells: HashSet<[i32; 2]>,
 }
 
 impl GameState {
@@ -223,6 +229,8 @@ impl GameState {
       radar_cooldown: 0,
       trap_cooldown: 0,
       miner_with_radar: None,
+      dangerous_opponents: HashSet::new(),
+      dangerous_cells: HashSet::new(),
     }
   }
 
@@ -448,9 +456,15 @@ impl GameState {
 
     for x in 0 .. self.width {
       for y in 0 .. self.height {
-        let cell = self.cell(x as i32, y as i32).unwrap();
         let x = x as i32;
         let y = y as i32;
+
+        // prevent digging dangerous cells
+        if self.is_cell_dangerous(x, y) {
+          continue;
+        }
+
+        let cell = self.cell(x, y).unwrap();
 
         match cell.ore_amount {
           Some(ore_amount) if ore_amount > 0 => {
@@ -473,8 +487,6 @@ impl GameState {
       // this part of code finds the solution to that problem
       let mut solution = [x, y];
 
-      eprintln!("{}: found solution ({}, {}) (I’m at ({}, {}))", miner_index, x, y, miner.x, miner.y);
-
       for i in &[-1, 1] {
         let candidate = [x + i, y];
         if self.cell(candidate[0], candidate[1]).is_some() {
@@ -491,11 +503,22 @@ impl GameState {
         }
       }
 
-      eprintln!("{}: -> digging at ({}, {})", miner_index, solution[0], solution[1]);
-
       Order::DigAt(x, y, solution[0], solution[1])
     } else {
-      Order::go_to_random(self.width as i32, self.height as i32)
+      // loop until we find a safe destination; if we cannot find any, we’ll just wait (it’s a
+      // bad situation but it’s safer than being killed)
+      let mut final_order = None;
+
+      for _ in 0 .. MAX_RANDOM_SAFE_DEST_TRIES {
+        let order = Order::go_to_random(self.width as i32, self.height as i32);
+        let [x, y] = order.destination();
+
+        if !self.is_cell_dangerous(x, y) {
+          final_order = Some(order);
+        }
+      }
+
+      final_order.unwrap_or(Order::Stay(miner.x, miner.y))
     }
   }
 
@@ -519,6 +542,19 @@ impl GameState {
   /// Implement digging go-to-like orders.
   fn order_go_to(&mut self, miner_index: usize, x: i32, y: i32, dig_x: i32, dig_y: i32) -> Request {
     let miner = self.miners[miner_index].clone();
+
+    // first thing first; check if the cell we are going to dig is not trapped; if it is, we need
+    // to ABORT mission and regenerate a new order; this might happen if we received the order
+    // from far away and the opponent detected that we wanted to go at that place and put a trap
+    // while we were commutting (fuck them)
+    if self.is_cell_dangerous(dig_x, dig_y) {
+      let order = self.choose_order(miner_index);
+      let [dx, dy] = order.destination();
+
+      self.miners[miner_index].order = order;
+
+      return Request::Move(dx, dy);
+    }
 
     if manh_dist([x, y], [miner.x, miner.y]) == 0 {
       // we arrived at our destination, so let’s inspect the cell
@@ -550,7 +586,7 @@ impl GameState {
       // order and go dig in that case!
       let other_order = self.choose_order(miner_index);
       if other_order.is_digging_order()
-        && manh_dist([miner.x, miner.y], other_order.destination()) < manh_dist([miner.x, miner.y], [x, y]) {
+        && (miner.order.is_random() || manh_dist([miner.x, miner.y], other_order.destination()) < manh_dist([miner.x, miner.y], [x, y])) {
           // if it gets optimal, we’ll move to a closer location
           self.miners[miner_index].order = other_order;
           let [dx, dy] = other_order.destination();
@@ -560,6 +596,11 @@ impl GameState {
         Request::Move(x, y)
       }
    }
+  }
+
+  /// Check if a cell is dangerous.
+  fn is_cell_dangerous(&self, x: i32, y: i32) -> bool {
+    self.dangerous_cells.contains(&[x, y])
   }
 }
 
@@ -615,6 +656,8 @@ impl Miner {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Order {
+  /// Do just nothing.
+  Stay(i32, i32),
   /// Move to a given unit.
   ///
   /// This is an exploration mode. If a better alternative is found, this unit should abort this
@@ -644,10 +687,19 @@ impl Order {
 
   fn destination(&self) -> [i32; 2] {
     match *self {
+      Order::Stay(x, y) => [x, y],
       Order::GoTo(x, y) => [x, y],
       Order::DigAt(_, _, x, y) => [x, y],
       Order::DeployRadarAt(x, y) => [x, y],
       Order::Deliver(x, y) => [x, y],
+    }
+  }
+
+  fn is_random(&self) -> bool {
+    if let Order::GoTo(..) = *self {
+      true
+    } else {
+      false
     }
   }
 
@@ -799,10 +851,33 @@ fn main() {
       // we don’t do anything at the first round since velocity gradients are not yet computed
       if turn != 0 {
         if miner.velocity_gradient() == [0, 0] {
-          eprintln!("enemy at ({}, {}) is doing something fishy!", miner.x, miner.y);
-
           if miner.x == 0 {
-            eprintln!("-> might be asking for an item!");
+            eprintln!("{} -> might be asking for an item!", miner_index);
+            game_state.dangerous_opponents.insert(miner_index);
+          } else if game_state.dangerous_opponents.contains(&miner_index) {
+            game_state.dangerous_opponents.remove(&miner_index);
+
+            eprintln!("{} -> might be burying a radar or a trap!", miner_index);
+
+            // maybe the trap is on the current player position
+            if game_state.cell(miner.x, miner.y).unwrap().has_hole {
+              game_state.dangerous_cells.insert([miner.x, miner.y]);
+            }
+
+            // we add the whole cross as dangerous too, which is very “defensive” but whatever
+            for i in -1 .. 1 {
+              if let Some(cell) = game_state.cell(miner.x + i, miner.y) {
+                if cell.has_hole {
+                  game_state.dangerous_cells.insert([miner.x + i, miner.y]);
+                }
+              }
+
+              if let Some(cell) = game_state.cell(miner.x, miner.y + i) {
+                if cell.has_hole {
+                  game_state.dangerous_cells.insert([miner.x, miner.y + i]);
+                }
+              }
+            }
           }
         }
       }
@@ -865,6 +940,8 @@ fn main() {
               Request::Move(dx, dy)
             }
           }
+
+          Order::Stay(..) => Request::Wait,
 
           _ => unreachable!()
         }
