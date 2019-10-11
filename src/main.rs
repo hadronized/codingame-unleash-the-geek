@@ -942,7 +942,7 @@ fn main() {
             game_state.order_go_to(miner_index, x, y, dig_x, dig_y)
           }
 
-          Order::Deliver(x, y) => {
+          Order::Deliver(..) => {
             if miner.x != 0 {
               Request::back_to_hq([miner.x, miner.y])
             } else {
@@ -960,7 +960,7 @@ fn main() {
         }
       };
 
-      request.comment(format!("Δ=({:?}", miner.velocity_gradient())).submit();
+      request.submit();
     }
 
     game_state.setup_next_turn();
