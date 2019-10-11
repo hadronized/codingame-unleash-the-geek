@@ -59,7 +59,10 @@ Possible enhancements:
 
 ## v0.3
 
-- [ ] When no ore data is available, we shouldn’t go too far away to unburry.
+- [ ] When no ore data is available, we shouldn’t go too far away to unburry. This is fixed via a
+  _permanent snapshot_ of the cells. That is the same thing as the grid of cells but instead of
+  showing the current live version of the map, it keeps memory of thing we knew was there. That
+  should allow for several cool optimizations.
 - [ ] Handle overcrowded ore cell dispatch.
 - [x] We can untag dangerous cell and make them safe back by storing the amount of ore for each
   dangerous zone: at every turn, we look at each bad zone and check whether the value has decreased.

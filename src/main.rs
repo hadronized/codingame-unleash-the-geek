@@ -9,8 +9,24 @@ use std::io;
 const MIN_ORE_NO_RADAR_NEEDED: usize = 10;
 
 /// Maximum number of times a miner will try to pick a safe random destination before actually
-/// staying where it is.
+/// giving up and staying where it is.
 const MAX_RANDOM_SAFE_DEST_TRIES: usize = 10;
+
+/// Normalized quantity of cells that must be discovered at a given exploration point before trying
+/// the next patch.
+const EXPLORATION_RATIO_THRESHOLD: f32 = 0.75;
+
+/// Distance at which we we’ll start digging when starting the game. It means that we will NEVER
+/// try to dig before that distance.
+const EXPLORATION_START_MIN_DISTANCE: i32 = 3;
+
+/// Delta to compute the next maximum distance at which we we’ll stop digging.
+///
+/// That value is used in the formula:
+///
+///   exploration_distance_min = exploration_distance
+///   exploration_distance_max = exploration_distance + EXPLORATION_DELTA_DISTANCE
+const EXPLORATION_DELTA_DISTANCE: i32 = 3;
 
 macro_rules! parse_input {
     ($x:expr, $t:ident) => ($x.trim().parse::<$t>().unwrap())
@@ -211,6 +227,8 @@ struct GameState {
   miner_with_radar: Option<usize>,
   dangerous_opponents: HashSet<usize>,
   dangerous_cells: HashMap<[i32; 2], Cell>,
+  exploration_distance: i32, // max distance we’ve randomly explored so far
+  cells_snapshot: Vec<Cell>, // a snapshot of self.cells that gets updated only for “better”
 }
 
 impl GameState {
@@ -231,6 +249,8 @@ impl GameState {
       miner_with_radar: None,
       dangerous_opponents: HashSet::new(),
       dangerous_cells: HashMap::new(),
+      exploration_distance: EXPLORATION_START_MIN_DISTANCE,
+      cells_snapshot: vec![Cell::default(); width * height],
     }
   }
 
@@ -242,12 +262,17 @@ impl GameState {
     self.opponent_score = score;
   }
 
-  fn set_ore(&mut self, x: usize, y: usize, ore_amount: Option<usize>) {
-    self.cells[y * self.width + x].ore_amount = ore_amount;
-  }
+  fn update_cell(&mut self, x: usize, y: usize, ore_amount: Option<usize>, hole: bool) {
+    let index = y * self.width + x;
 
-  fn set_hole(&mut self, x: usize, y: usize, hole: bool) {
+    self.cells[index].ore_amount = ore_amount;
     self.cells[y * self.width + x].has_hole = hole;
+
+    // for the snapshot, we update only if we have a new value
+    if ore_amount.is_some() {
+      self.cells_snapshot[index].ore_amount = ore_amount;
+      self.cells[y * self.width + x].has_hole = hole;
+    }
   }
 
   fn set_radar_cooldown(&mut self, cooldown: u32) {
@@ -507,7 +532,8 @@ impl GameState {
       let mut final_order = None;
 
       for _ in 0 .. MAX_RANDOM_SAFE_DEST_TRIES {
-        let order = Order::go_to_random(self.width as i32, self.height as i32);
+        //let order = Order::go_to_random(self.width as i32, self.height as i32);
+        let order = Order::go_to_restricted_random(self.width as i32, self.height as i32, self.exploration_distance);
         let [x, y] = order.destination();
 
         if !self.is_cell_dangerous(x, y) {
@@ -516,6 +542,40 @@ impl GameState {
       }
 
       final_order.unwrap_or(Order::Stay(miner.x, miner.y))
+    }
+  }
+
+  /// Update the window distances we are willing to send miners. Updating that value depends on
+  /// several things:
+  ///
+  /// - We have no ore data available, i.e. miners will _have_ to randomly explore.
+  /// - We must have discovered “enough” cells up to the current value, otherwise, we’ll ask to
+  ///   pick the remaining random cells.
+  fn update_exploration_distances(&mut self) {
+    if self.visible_ore_amount() == 0 {
+      // compute the number of cells there is in the patch we are digging
+      let cells_count = self.height as i32 * EXPLORATION_DELTA_DISTANCE;
+      let mut holes = 0;
+
+      for x in self.exploration_distance .. (self.exploration_distance + EXPLORATION_DELTA_DISTANCE).min(self.width as i32) {
+        for y in 0 .. self.height as i32 {
+          // for all those cells, look for the number of cells we know we have digged
+          if self.cells_snapshot[y as usize * self.width + x as usize].has_hole {
+            holes += 1;
+          }
+        }
+      }
+
+      // now we can compute the ratio holes / cells_count; it gives us our “exploration” ratio for
+      // this area
+      let exploration_ratio = holes as f32 / cells_count as f32;
+
+      // if it’s over the threshold, we need to explore another patch
+      if exploration_ratio >= EXPLORATION_RATIO_THRESHOLD {
+        self.exploration_distance += EXPLORATION_DELTA_DISTANCE;
+
+        eprintln!("new exploration window: {} -> {}", self.exploration_distance, self.exploration_distance + EXPLORATION_DELTA_DISTANCE);
+      }
     }
   }
 
@@ -565,7 +625,7 @@ impl GameState {
         // case of an unknown cell with no hole; we are there so we just dig to check
         Request::Dig(dig_x, dig_y)
       } else if cell.ore_amount.unwrap_or(0) > 0 {
-        // the current cell the current cell has some ore so we dig it
+        // the current cell has some ore so we dig it
         self.miners[miner_index].order = Order::Deliver(miner.x, miner.y);
         Request::Dig(dig_x, dig_y)
       } else {
@@ -592,7 +652,7 @@ impl GameState {
         // we haven’t found a better solution so let’s keep going
         Request::Move(x, y)
       }
-   }
+    }
   }
 
   /// Check whether a cell is dangerous.
@@ -686,9 +746,14 @@ enum Order {
 }
 
 impl Order {
-  fn go_to_random(width: i32, height: i32) -> Self {
+  /// A version of go_to_random restricted by a window
+  fn go_to_restricted_random(width: i32, height: i32, exploration_distance: i32) -> Self {
     let mut rng = thread_rng();
-    Order::GoTo(rng.gen_range(1, width), rng.gen_range(0, height))
+
+    Order::GoTo(
+      rng.gen_range(exploration_distance, (exploration_distance + EXPLORATION_DELTA_DISTANCE).min(width)),
+      rng.gen_range(0, height)
+    )
   }
 
   /// Deploy a radar at a random location; we prevent burrying the radar too close to edges because
@@ -759,8 +824,7 @@ fn main() {
         let ore: Option<usize> = inputs[2 * x].trim().parse().ok(); // amount of ore or "?" if unknown
         let hole = parse_input!(inputs[2 * x + 1], u32) == 1; // 1 if cell has a hole
 
-        game_state.set_ore(x, y, ore);
-        game_state.set_hole(x, y, hole);
+        game_state.update_cell(x, y, ore, hole);
       }
     }
 
@@ -799,7 +863,7 @@ fn main() {
               item,
               uid,
               alive: true,
-              order: Order::go_to_random(width, height),
+              order: Order::go_to_restricted_random(width, height, game_state.exploration_distance),
             });
 
             game_state.add_entity(uid, Entity::Miner(miner_index));
@@ -813,7 +877,7 @@ fn main() {
               item,
               uid,
               alive: true,
-              order: Order::go_to_random(width, height),
+              order: Order::Stay(x, y),
             });
 
             game_state.add_entity(uid, Entity::OpponentMiner(opponent_miner_index));
@@ -896,7 +960,6 @@ fn main() {
       }
     }
 
-    // FIXME: idea: burry the radar then unburry it immediately in order to burry it elsewhere
     // select a miner to carry radar if not already there
     if game_state.radar_cooldown == 0
       && game_state.miner_with_radar.is_none()
@@ -905,6 +968,9 @@ fn main() {
     {
       game_state.assign_radar();
     }
+
+    // update the exploration distances if needed
+    game_state.update_exploration_distances();
 
     for miner_index in 0 .. game_state.miners.len() {
       let miner = game_state.miners[miner_index].clone();
