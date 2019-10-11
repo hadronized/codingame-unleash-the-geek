@@ -73,3 +73,6 @@ Possible enhancements:
 - [ ] Handle overcrowded ore cell dispatch.
 - [ ] We need to be able to recover broken radars.
 - [ ] We sometimes timeout!! I think it was due to a bad handling of dead opponents.
+- [ ] We need to make the optimization for radar placement too.
+- [x] Do not take dangerous cells into account when computing the visible ore amount if we think
+  they’re trapped.

@@ -581,7 +581,17 @@ impl GameState {
 
   /// Total amount of ore we know about.
   fn visible_ore_amount(&self) -> usize {
-    self.cells.iter().map(|cell| cell.ore_amount.unwrap_or(0)).sum()
+    let mut amount = 0;
+
+    for x in 0 .. self.width {
+      for y in 0 .. self.height {
+        if !self.is_cell_dangerous(x as i32, y as i32) {
+          amount += self.cells[y * self.width + x].ore_amount.unwrap_or(0);
+        }
+      }
+    }
+
+    amount
   }
 
   /// Prepare the next turn by updating what must be updated.
