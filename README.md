@@ -67,3 +67,9 @@ Possible enhancements:
 - [x] We can untag dangerous cell and make them safe back by storing the amount of ore for each
   dangerous zone: at every turn, we look at each bad zone and check whether the value has decreased.
   If so, it means that the enemy has been digging in it and then it’s safe.
+
+## v0.4
+
+- [ ] Handle overcrowded ore cell dispatch.
+- [ ] We need to be able to recover broken radars.
+- [ ] We sometimes timeout!! I think it was due to a bad handling of dead opponents.

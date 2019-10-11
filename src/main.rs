@@ -14,7 +14,7 @@ const MAX_RANDOM_SAFE_DEST_TRIES: usize = 10;
 
 /// Normalized quantity of cells that must be discovered at a given exploration point before trying
 /// the next patch.
-const EXPLORATION_RATIO_THRESHOLD: f32 = 0.75;
+const EXPLORATION_RATIO_THRESHOLD: f32 = 0.6;
 
 /// Distance at which we we’ll start digging when starting the game. It means that we will NEVER
 /// try to dig before that distance.
@@ -26,7 +26,7 @@ const EXPLORATION_START_MIN_DISTANCE: i32 = 3;
 ///
 ///   exploration_distance_min = exploration_distance
 ///   exploration_distance_max = exploration_distance + EXPLORATION_DELTA_DISTANCE
-const EXPLORATION_DELTA_DISTANCE: i32 = 3;
+const EXPLORATION_DELTA_DISTANCE: i32 = 5;
 
 macro_rules! parse_input {
     ($x:expr, $t:ident) => ($x.trim().parse::<$t>().unwrap())
@@ -926,6 +926,10 @@ fn main() {
     // try to detect if an opponent is asking for an item
     for miner_index in 0 .. game_state.opponent_miners.len() {
       let miner = game_state.opponent_miners[miner_index].clone();
+
+      if miner.x == -1 && miner.y == -1 {
+        continue;
+      }
 
       // we don’t do anything at the first round since velocity gradients are not yet computed
       if turn != 0 {
