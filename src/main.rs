@@ -554,7 +554,7 @@ impl GameState {
   fn update_exploration_distances(&mut self) {
     if self.visible_ore_amount() == 0 {
       // compute the number of cells there is in the patch we are digging
-      let cells_count = self.height as i32 * EXPLORATION_DELTA_DISTANCE;
+      let cells_count = self.height as i32 / 2 * EXPLORATION_DELTA_DISTANCE;
       let mut holes = 0;
 
       for x in self.exploration_distance .. (self.exploration_distance + EXPLORATION_DELTA_DISTANCE).min(self.width as i32) {
@@ -672,7 +672,7 @@ impl GameState {
 
   /// Tag dangerous cells safe if we’re sure they’re not dangerous anymore.
   fn retag_safe_cells(&mut self) {
-    let cells = &self.cells;
+    let cells = &self.cells_snapshot;
     let width = self.width;
 
     self.dangerous_cells.retain(|[dx, dy], dangerous_cell| {

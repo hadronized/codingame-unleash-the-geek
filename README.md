@@ -76,3 +76,5 @@ Possible enhancements:
 - [ ] We need to make the optimization for radar placement too.
 - [x] Do not take dangerous cells into account when computing the visible ore amount if we think
   they’re trapped.
+- [ ] First attack pattern: place mines right off the gates in a long chain and wait for several
+  enemies to show up.
