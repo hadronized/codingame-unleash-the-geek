@@ -938,6 +938,10 @@ fn main() {
       let miner = game_state.opponent_miners[miner_index].clone();
 
       if miner.x == -1 && miner.y == -1 {
+        if game_state.miner_with_radar == Some(miner_index) {
+          game_state.miner_with_radar = None;
+        }
+
         continue;
       }
 
